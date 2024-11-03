@@ -2,140 +2,67 @@ import random
 from collections import defaultdict
 from collections import deque
 import json
-from tools import *
+import hashlib
+from graphviz import Digraph
+import numpy as np
+from tools import Graph, Node, SCHEDULING_OVERHEAD
+
+
 
 
 with open('hlg_simplified.json', 'r') as json_in:
     loaded_children_of = json.load(json_in)
     children_of = {key: set(value) for key, value in loaded_children_of.items()}
 
-children_of, parents_of = initialize_graph(children_of)
+g = Graph(children_of)
 
-e_min = 10
-e_max = 100
-execution_time = defaultdict(lambda: random.randint(e_min, e_max), {node: random.randint(e_min, e_max) for node in children_of})
-s = 30    # scheduling overhead
-c = 10    # communication overhead
+# g.visualize('/Users/jinzhou/Downloads/original_hlg')
 
 
-critical_time = compute_critical_time(children_of, parents_of, execution_time)
+def merge_graph(g):
+    print(f"size of graph: {g.get_num_nodes()}")
 
-print(f"Critical Path Length of the entire graph: {max(critical_time.values())}")
-merge_mapping = {}
-
-
-def merge_graph(children_of):
-    reachability = connectivity_dict(children_of)
-
-    print(f"size of graph: {len(children_of)}")
-    visited = set()
-    has_update = False
-
-    topo_order = get_topo_order(children_of)
+    topo_order = g.get_topo_order()
 
     while topo_order:
         # can we merge this node and all its parents?
         current_node = topo_order.popleft()
 
-        parents = parents_of[current_node].copy()
-        children = children_of[current_node].copy()
-
-        # skip if already visited
-        if current_node in visited:
+        # skip if already merged: 1. it belongs to a merged part; 2. it is a part itself
+        if current_node.belongs_to_part:
             continue
-        visited.add(current_node)
 
-        # skip if this node has no parents
-        if not parents:
-            continue
-        part = parents.copy()
-        part.add(current_node)
-        part, part_max_critical_time = get_part_closure(part, children_of, reachability, execution_time)
+        # consider those children that have not been merged yet
+        part_nodes = set([current_node])
+        part_children = deque()
+        part_children.extendleft(current_node.get_children())
 
-        can_be_parallelized = False   # this node can finish before all parents finish
-        for p in parents:
-            if critical_time[p] >= critical_time[current_node]:
-                can_be_parallelized = True
-        if can_be_parallelized:
-            t_keep = 0
-        else:
-            t_keep = max(execution_time[n] for n in parents) + execution_time[current_node] + len(part) * s + len(parents) * c
+        part_start_time = current_node.critical_time
 
+        while part_children:
+            child_node = part_children.popleft()
+            if child_node.belongs_to_part:
+                continue
 
-        t_merge = sum(execution_time[n] for n in part) + s
+            # when considering a child node, we are considering the closure of the child node and the parts
+            temp_part_nodes = g.get_part_nodes_closure(set([child_node, *part_nodes]))
+            to_be_merged_nodes = set(temp_part_nodes) - part_nodes
 
+            t_keep = max([node.critical_time for node in temp_part_nodes]) - part_start_time + SCHEDULING_OVERHEAD * len(to_be_merged_nodes)
+            t_merge = sum([node.execution_time for node in temp_part_nodes])
 
-        if t_merge <= t_keep:
-            has_update = True
+            if t_merge <= t_keep:
+                part_nodes.update(temp_part_nodes)
+                g.merge_nodes(part_nodes)
 
-            visited.update(parents)
+                for added_node in to_be_merged_nodes:
+                    part_children.extendleft(added_node.get_children())
 
-            merged_node_name = hash_name(part)
-            merge_mapping[merged_node_name] = part
-
-            # print(f"current node: {current_node}, children: {children}, merged_node_name: {merged_node_name}")
-
-            execution_time[merged_node_name] = sum(execution_time[n] for n in part)
-            critical_time[merged_node_name] = max(critical_time[n] for n in part)
-
-            # the merging affects the critical time of all downstream nodes
-
-            # redirect the parents and children of the merged part
-            parents_of_part = set()
-            children_of_part = set()
-            for n in part:
-                parents_of_part.update(parents_of[n])
-                children_of_part.update(children_of[n])
-            parents_of_part -= part
-            children_of_part -= part
-
-            for parent_of_part in parents_of_part:
-                children_of[parent_of_part] -= part
-                children_of[parent_of_part].add(merged_node_name)
-
-            for child_of_part in children_of_part:
-                parents_of[child_of_part] -= part
-                parents_of[child_of_part].add(merged_node_name)
-
-            children_of[merged_node_name] = children_of_part
-            parents_of[merged_node_name] = parents_of_part
-
-            # remove the part from the graph
-            for n in part:
-                del children_of[n]
-                del parents_of[n]
-                del execution_time[n]
-                del critical_time[n]
-                del reachability[n]
-
-            print(f"merged_node_name: {merged_node_name}")
-
-            replace_part_with_node(merged_node_name, reachability, children_of_part, parents_of_part, parents_of)
-
-            # update the reachability
-
-            # add the merged part to the graph
-            children_of[merged_node_name] = set(children_of_part)
-            parents_of[merged_node_name] = set(parents_of_part)
-
-            # add to the topo_order
-            topo_order.appendleft(merged_node_name)
-
-        else:
-            # keep as is
-            pass
-
-    print(f"size of merged graph: {len(children_of)}")
-    return has_update
+        print(f"part_nodes: {len(part_nodes)}")
 
 
-while True:
+merge_graph(g)
+g.visualize('/Users/jinzhou/Downloads/merged_hlg')
+"""
 
-    if not merge_graph(children_of):
-        break
-
-merge_graph(children_of)
-
-
-output_file = '/Users/jinzhou/Downloads/merged_hlg'
-visualize_graph(children_of, output_file, critical_time)
+"""
