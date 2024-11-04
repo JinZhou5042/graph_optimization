@@ -19,8 +19,8 @@ def generate_random_colors(num_colors):
 
 colors = generate_random_colors(5000)
 
-EXECUTION_TIME_RANGE = (10, 1000)
-SCHEDULING_OVERHEAD = 40
+EXECUTION_TIME_RANGE = (10, 100)
+SCHEDULING_OVERHEAD = 400000000
 COMMUNICATION_OVERHEAD = 10
 
 def hash_name(*args):
@@ -49,12 +49,11 @@ class Graph:
             if not node.parents:
                 node.critical_time = node.execution_time
             else:
-                node.critical_time = max([parent.critical_time for parent in node.get_parents()]) + node.execution_time
-
+                node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
 
         # initialize the reachable nodes from each node
         def dfs(node, visited):
-            for child_node in node.get_children():
+            for child_node in node.children:
                 if child_node not in visited:
                     visited.add(child_node)
                     dfs(child_node, visited)
@@ -79,13 +78,13 @@ class Graph:
         node = self.nodes[node_name]
 
         def dfs(node):
-            for parent in node.get_parents():
+            for parent in node.parents:
                 parent.remove_reachable_node(node)
                 dfs(parent)
         dfs(node)
 
         def dfs(node):
-            for child in node.get_children():
+            for child in node.children:
                 child.remove_reachable_node(node)
                 dfs(child)
         dfs(node)
@@ -119,7 +118,7 @@ class Graph:
             if u in visited:
                 return
             visited.add(u)
-            for v in u.get_children():
+            for v in u.children:
                 dfs(v)
             if u in nodes_to_sort:
                 stack.append(u)
@@ -148,12 +147,12 @@ class Graph:
             visited.add(current_node)
 
             # skip if this node can not reach one of the end nodes
-            if not current_node.get_reachable_nodes() & part_nodes:
+            if not current_node.reachable_nodes & part_nodes:
                 return
-            
+
             part_nodes_closure.add(current_node)
 
-            for child_node in current_node.get_children():
+            for child_node in current_node.children:
                 dfs(child_node)
 
         for part_node in part_nodes:
@@ -174,7 +173,7 @@ class Graph:
             downstream_topo_order = deque(set(downstream_topo_order) - part_nodes)
 
             for node in downstream_topo_order:
-                node.critical_time = max([parent.critical_time for parent in node.get_parents()]) + node.execution_time
+                node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
     
     def visualize(self, filename="graph", label='id', fill_white=False):
         dot = Digraph()
@@ -201,7 +200,7 @@ class Graph:
             else:
                 raise ValueError(f"Unknown label: {label}")
         for node in self.nodes.values():
-            for parent_node in node.get_parents():
+            for parent_node in node.parents:
                 dot.edge(parent_node.hash_name, node.hash_name)
 
         dot.render(filename, format='svg', cleanup=True)        
@@ -229,24 +228,9 @@ class Node:
         # this node is merged with other nodes
         self.belongs_to_part = set()
 
-    def get_execution_time(self):
-        return self.execution_time
-    
-    def get_scheduling_overhead(self):
-        return self.scheduling_overhead
-    
-    def get_reachable_nodes(self):
-        return self.reachable_nodes
-
-    def get_parents(self):
-        return self.parents
-    
-    def get_children(self):
-        return self.children
-
     def set_parents(self, parents):
         self.parents = parents
-    
+
     def set_children(self, children):
         self.children = children
 
@@ -273,6 +257,3 @@ class Node:
     
     def remove_reachable_nodes(self, nodes):
         self.reachable_nodes.difference_update(nodes)
-
-
-

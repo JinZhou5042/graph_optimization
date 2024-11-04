@@ -35,7 +35,7 @@ def merge_graph(g):
         # consider those children that have not been merged yet
         part_nodes = set([current_node])
         part_children = deque()
-        part_children.extendleft(current_node.get_children())
+        part_children.extendleft(current_node.children)
 
         part_start_time = current_node.critical_time
 
@@ -56,13 +56,10 @@ def merge_graph(g):
                 g.merge_nodes(part_nodes)
 
                 for added_node in to_be_merged_nodes:
-                    part_children.extendleft(added_node.get_children())
+                    part_children.extendleft(added_node.children)
 
         print(f"part_nodes: {len(part_nodes)}")
 
 
 merge_graph(g)
 g.visualize('/Users/jinzhou/Downloads/merged_hlg')
-"""
-
-"""
