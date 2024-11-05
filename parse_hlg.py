@@ -103,7 +103,7 @@ if __name__ == "__main__":
     json_file = 'expanded_hlg.json'
     with open(json_file, 'r') as f:
         json_data = json.load(f)
-    
+
     # parse the DAG dependencies
     parent_of = defaultdict(lambda: set())
     children_of = defaultdict(lambda: set())
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     # print(f"eliminated linear dependencies, {len(parent_of)}/{original_num_nodes} nodes left")
 
 
-    with open('hlg_simplified.json', 'w') as json_out:
+    with open('simplified_hlg.json', 'w') as json_out:
         json.dump({key: list(value) for key, value in children_of.items()}, json_out, indent=4)
 
     # render the DAG

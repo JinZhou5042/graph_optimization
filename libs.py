@@ -20,7 +20,7 @@ def generate_random_colors(num_colors):
 colors = generate_random_colors(5000)
 
 EXECUTION_TIME_RANGE = (10, 100)
-SCHEDULING_OVERHEAD = 400000000
+SCHEDULING_OVERHEAD = 400
 COMMUNICATION_OVERHEAD = 10
 
 def hash_name(*args):
@@ -176,6 +176,7 @@ class Graph:
                 node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
     
     def visualize(self, filename="graph", label='id', fill_white=False):
+        print(f"Saving graph to {filename}.svg")
         dot = Digraph()
 
         for node in self.nodes.values():

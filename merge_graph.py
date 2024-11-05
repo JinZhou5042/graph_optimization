@@ -5,8 +5,7 @@ import json
 import hashlib
 from graphviz import Digraph
 import numpy as np
-from tools import Graph, Node, SCHEDULING_OVERHEAD
-
+from libs import Graph, Node, SCHEDULING_OVERHEAD
 
 
 
@@ -16,7 +15,7 @@ with open('hlg_simplified.json', 'r') as json_in:
 
 g = Graph(children_of)
 
-# g.visualize('/Users/jinzhou/Downloads/original_hlg')
+# g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
 
 def merge_graph(g):
