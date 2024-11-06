@@ -2,6 +2,7 @@ import random
 from collections import defaultdict
 from collections import deque
 import json
+from heapq import heappush, heappop
 import hashlib
 from graphviz import Digraph
 import numpy as np
@@ -19,8 +20,8 @@ def generate_random_colors(num_colors):
 
 colors = generate_random_colors(5000)
 
-EXECUTION_TIME_RANGE = (10, 100)
-SCHEDULING_OVERHEAD = 400
+EXECUTION_TIME_RANGE = (1, 20)
+SCHEDULING_OVERHEAD = 4
 COMMUNICATION_OVERHEAD = 10
 
 def hash_name(*args):
@@ -137,8 +138,8 @@ class Graph:
         return deque(stack[::-1])
     
     # the closured nodes cannot be inter-reached from the nodes outside the closure
-    def get_part_nodes_closure(self, part_nodes):
-        part_nodes_closure = part_nodes.copy()
+    def get_group_closure(self, group_nodes):
+        group_closure = group_nodes.copy()
         visited = set()
 
         def dfs(current_node):
@@ -147,30 +148,66 @@ class Graph:
             visited.add(current_node)
 
             # skip if this node can not reach one of the end nodes
-            if not current_node.reachable_nodes & part_nodes:
+            if not current_node.reachable_nodes & group_nodes:
                 return
 
-            part_nodes_closure.add(current_node)
+            group_closure.add(current_node)
+
+            # add parents that are ready
+            
 
             for child_node in current_node.children:
                 dfs(child_node)
 
-        for part_node in part_nodes:
+        for part_node in group_nodes:
             dfs(part_node)
 
-        return part_nodes_closure
+        return group_closure
     
-    def merge_nodes(self, part_nodes):
-        part_topo_order = self.get_topo_order(nodes=part_nodes)
+
+    def get_group_completion_time(group_nodes, num_cores):
+        all_tasks = group_nodes.copy()
+        ready_tasks = [node for node in all_tasks if not node.pending_parents]
+        waiting_tasks = [node for node in all_tasks if node.pending_parents]
+        running_tasks = []
+        time = 0
+        critical_time = 0
+        core_usage = 0
+
+        while ready_tasks or running_tasks:
+            while ready_tasks and core_usage < num_cores:
+                core_usage += 1
+                task = ready_tasks.pop(0)
+                task.start_time = time
+                task.end_time = time + task.execution_time
+                heappush(running_tasks, task)
+
+            finished_task = heappop(running_tasks)
+            core_usage -= 1
+            critical_time = max(critical_time, finished_task.end_time)
+
+            # enqueue tasks in waiting queue
+            for waiting_task in waiting_tasks:
+                if finished_task in waiting_task.pending_parents:
+                    waiting_task.pending_parents.remove(finished_task)
+                    if not task.pending_parents:
+                        ready_tasks.append(waiting_task)
+                        waiting_tasks.remove(waiting_task)
+
+        return critical_time
+
+
+    def merge_nodes(self, group_nodes):
+        part_topo_order = self.get_topo_order(nodes=group_nodes)
         for i, part_node in enumerate(part_topo_order):
-            part_node.belongs_to_part = part_nodes
+            part_node.belongs_to_part = group_nodes
             if i >= 1:
                 part_node.critical_time = part_topo_order[i - 1].critical_time + part_node.execution_time
 
-        if len(part_nodes) >= 3:
+        if len(group_nodes) >= 3:
             # update the downstream critical time
-            downstream_topo_order = self.get_topo_order(start_nodes=part_nodes)
-            downstream_topo_order = deque(set(downstream_topo_order) - part_nodes)
+            downstream_topo_order = self.get_topo_order(start_nodes=group_nodes)
+            downstream_topo_order = deque(set(downstream_topo_order) - group_nodes)
 
             for node in downstream_topo_order:
                 node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
@@ -207,6 +244,31 @@ class Graph:
         dot.render(filename, format='svg', cleanup=True)        
 
 
+class Group:
+    def __init__(self):
+        self.nodes = set()
+        self.depth = 0      # critical time
+
+    def add_node(self, node):
+        self.nodes.add(node)
+
+    def remove_node(self, node):
+        self.nodes.remove(node)
+
+    def get_critical_time(self):
+        
+
+
+
+class Cluster:
+    def __init__(self, num_workers, num_cores_per_worker):
+        self.num_workers = num_workers
+        self.num_cores_per_worker = num_cores_per_worker
+
+        self.core_release_times = np.zeros((self.num_workers, self.num_cores_per_worker), dtype=int)
+
+
+
 class Node:
     def __init__(self, name, id, execution_time, scheduling_overhead):
         # must be initialized
@@ -219,6 +281,7 @@ class Node:
 
         self.children = set()
         self.parents = set()
+        self.pending_parents = set()
 
         # time taken from the start of the graph to the end of this node
         self.critical_time = 0
@@ -229,14 +292,12 @@ class Node:
         # this node is merged with other nodes
         self.belongs_to_part = set()
 
-    def set_parents(self, parents):
-        self.parents = parents
-
-    def set_children(self, children):
-        self.children = children
+        self.start_time = 0
+        self.end_time = 0
 
     def add_parent(self, parent):
         self.parents.add(parent)
+        self.pending_parents.add(parent)
 
     def add_child(self, child):
         self.children.add(child)
