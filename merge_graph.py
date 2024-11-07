@@ -3,15 +3,16 @@ from collections import defaultdict
 from collections import deque
 import json
 import hashlib
+from heapq import heappush, heappop
 from graphviz import Digraph
 import heapq
 import numpy as np
 import queue
-from libs import Graph, Node, SCHEDULING_OVERHEAD, Group, Cluster
+from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
 
 NUM_WORKERS = 4
 NUM_CORES_PER_WORKER = 4
-GROUP_DEPTH = 100   # we hope each group runs to about 20 seconds
+GROUP_DEPTH = 200   # we hope each group runs in a certain amount of time
 
 
 with open('hlg_simplified.json', 'r') as json_in:
@@ -22,31 +23,51 @@ g = Graph(children_of)
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
-def execute_graph(g):
-    cluster = Cluster(NUM_WORKERS, NUM_CORES_PER_WORKER)
 
-    ready_nodes = deque([node for node in g.nodes if not node.pending_parents])
+def execute_graph(g):
+
+    ready_nodes = deque()
+    for node in g.nodes.values():
+        if not node.pending_parents:
+            ready_nodes.append(node)
 
     while ready_nodes:
         ready_node = ready_nodes.popleft()
         group = Group()
         group.add_node(ready_node)
 
-        # child nodes with larger execution time are considered first
-        # group_children = heapq.heapify([(-child.execution_time, child) for child in group_children])
-        group_children = deque(sorted(ready_node.children, key=lambda x: -x.execution_time))
+        i = 0
+        num_available_cores = 2
 
-        while group_children:
-            if group.depth >= GROUP_DEPTH:
-                break
+        while (node_to_consider := group.consider_node()):
+
             # try to merge more nodes
-            child = group_children.popleft()
-            child_closure = g.get_group_closure(set([child, *group.nodes]))
+            group_to_consider = g.get_group_closure(set([node_to_consider, *group.nodes]))
+            critical_time_to_consider = g.get_group_completion_time(group_to_consider, num_available_cores)
+
+            if critical_time_to_consider >= GROUP_DEPTH:
+                continue
+
+            # this group is able to be merged
+            g.critical_time = critical_time_to_consider
+
+            new_nodes = group_to_consider - group.nodes
+
+            for new_node in new_nodes:
+                group.add_node(new_node)
+
+            resource_utilization = sum([node.execution_time for node in group.nodes]) / (g.critical_time * num_available_cores)
+
+            i += 1
+            g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", draw_nodes=group_to_consider, label='id')
+            print(g.critical_time, resource_utilization)
+
+        group.visualize()
+        exit(1)
+
+execute_graph(g)
 
 
-
-
-"""
 def merge_graph(g):
     print(f"size of graph: {g.get_num_nodes()}")
 
@@ -89,6 +110,6 @@ def merge_graph(g):
         print(f"part_nodes: {len(part_nodes)}")
 
 
-merge_graph(g)
-"""
-g.visualize('/Users/jinzhou/Downloads/merged_hlg')
+#merge_graph(g)
+
+#g.visualize('/Users/jinzhou/Downloads/merged_hlg')
