@@ -205,7 +205,9 @@ class Group:
         self.nodes.add(node)
 
         for child in node.children:
-            child_children_depth = mean([cc.depth for cc in child.children])
+            if child in self.nodes or child in self.pending_nodes:
+                continue
+            child_children_depth = mean([cc.depth for cc in child.children]) if child.children else 0
             heappush(self.children, (child_children_depth, id(child), child))
 
     def consider_child(self):
@@ -220,7 +222,7 @@ class Group:
         self.nodes.difference_update(nodes)
 
     # the closured nodes cannot be inter-reached from the nodes outside the closure
-    def pending_closure(self, new_node):
+    def get_pending_nodes(self, new_node):
         self.pending_nodes = set([new_node])
 
         visited = set()
@@ -236,13 +238,11 @@ class Group:
 
             self.pending_nodes.add(current_node)
 
-            # add parents that are ready
-            for parent_node in current_node.parents:
-                # the parent node is not yet merged, consider it
-                if parent_node not in self.nodes and not parent_node.group:
-                    self.pending_nodes.add(parent_node)
-                    dfs(parent_node)
-
+            # consider the parent: the closure should not depend on uncompleted nodes
+            #for parent_node in current_node.parents:
+            #    if parent_node not in self.nodes and not parent_node.group:
+            #        dfs(parent_node)
+#
             for child_node in current_node.children:
                 dfs(child_node)
 
@@ -251,6 +251,21 @@ class Group:
             dfs(n)
 
         self.pending_nodes -= self.nodes
+
+        # the pending nodes should not depend on ouside nodes
+        outside_parents = deque()
+        for pending_node in self.pending_nodes:
+            for parent in pending_node.parents:
+                if not parent.group:
+                    outside_parents.append(parent)
+        while outside_parents:
+            parent = outside_parents.popleft()
+            if parent in self.pending_nodes:
+                continue
+            for grandparent in parent.parents:
+                if not grandparent.group:
+                    outside_parents.append(grandparent)
+            self.pending_nodes.add(parent)
 
 
     def merge_pending_nodes(self):

@@ -12,7 +12,7 @@ from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
 
 NUM_WORKERS = 4
 NUM_CORES_PER_WORKER = 4
-GROUP_DEPTH = 300   # we hope each group runs in a certain amount of time
+GROUP_DEPTH = 6000   # we hope each group runs in a certain amount of time
 
 
 with open('hlg_simplified.json', 'r') as json_in:
@@ -33,14 +33,15 @@ def execute_graph(g):
 
     while ready_nodes:
         ready_node = ready_nodes.popleft()
-        group = Group(cores=2)
+        group = Group(cores=20)
         group.add_node(ready_node)
 
         i = 0
 
         while (child := group.consider_child()):
+
             # try to merge more nodes
-            group.pending_closure(child)
+            group.get_pending_nodes(child)
             group.schedule_to_cores()
 
             # cannot merge this node
@@ -49,13 +50,14 @@ def execute_graph(g):
                     continue
                 group.merge_pending_nodes()
                 i += 1
-                print(group.get_critical_time(), group.get_resource_utilization())
-                g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", label='id', draw_nodes=group.nodes)
+                # g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", label='id', draw_nodes=group.nodes)
             else:
                 group.revert_pending_nodes()
                 continue
 
-        group.visualize()
+            print(group.get_critical_time(), group.get_resource_utilization())
+        g.visualize(f"/Users/jinzhou/Downloads/merged", label='id', draw_nodes=group.nodes)
+        # group.visualize()
         exit(1)
 
 execute_graph(g)
