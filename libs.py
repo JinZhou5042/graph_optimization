@@ -195,9 +195,10 @@ class Graph:
 
 
 class Group:
-    def __init__(self, cores=0):
+    def __init__(self, cores=0, runtime_limit=0):
         self.nodes = set()
         self.cores = cores
+        self.runtime_limit = runtime_limit
         self.children = []
         self.pending_nodes = set()
 
@@ -209,6 +210,12 @@ class Group:
                 continue
             child_children_depth = mean([cc.depth for cc in child.children]) if child.children else 0
             heappush(self.children, (child_children_depth, id(child), child))
+
+    def set_runtime_limit(self, runtime_limit):
+        self.runtime_limit = runtime_limit
+
+    def set_cores(self, cores):
+        self.cores = cores
 
     def consider_child(self):
         if not self.children:
@@ -238,11 +245,6 @@ class Group:
 
             self.pending_nodes.add(current_node)
 
-            # consider the parent: the closure should not depend on uncompleted nodes
-            #for parent_node in current_node.parents:
-            #    if parent_node not in self.nodes and not parent_node.group:
-            #        dfs(parent_node)
-#
             for child_node in current_node.children:
                 dfs(child_node)
 
@@ -329,6 +331,27 @@ class Group:
         assert max([task.end_time for task in group_nodes]) == critical_time
 
         return critical_time
+    
+    def merge_from(self, starting_node):
+        self.add_node(starting_node)
+
+        while (child := self.consider_child()):
+
+            # try to merge more nodes
+            self.get_pending_nodes(child)
+            self.schedule_to_cores()
+
+            # cannot merge this node
+            if self.get_critical_time() <= self.runtime_limit:
+                if not len(self.pending_nodes):
+                    continue
+                self.merge_pending_nodes()
+                # g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", label='id', draw_nodes=group.nodes)
+            else:
+                self.revert_pending_nodes()
+                continue
+
+        self.schedule_to_cores()
 
     def visualize(self):
         self.schedule_to_cores()
