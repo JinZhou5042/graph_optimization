@@ -144,9 +144,84 @@ class Graph:
 
         return deque(stack[::-1])
 
+    def merge_nodes(self, group_nodes):
+        part_topo_order = self.get_topo_order(nodes=group_nodes)
+        for i, part_node in enumerate(part_topo_order):
+            part_node.belongs_to_part = group_nodes
+            if i >= 1:
+                part_node.critical_time = part_topo_order[i - 1].critical_time + part_node.execution_time
+
+        if len(group_nodes) >= 3:
+            # update the downstream critical time
+            downstream_topo_order = self.get_topo_order(start_nodes=group_nodes)
+            downstream_topo_order = deque(set(downstream_topo_order) - group_nodes)
+
+            for node in downstream_topo_order:
+                node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
+
+    def visualize(self, filename="graph", label='id', fill_white=False, draw_nodes=None):
+        print(f"Saving graph to {filename}.svg")
+
+        dot = Digraph()
+
+        draw_nodes = self.nodes.values() if not draw_nodes else draw_nodes
+
+        for node in draw_nodes:
+            if fill_white:
+                color = 'white'
+            else:
+                hash_object = hashlib.sha256(str(node.group).encode())
+                hash_int = int(hash_object.hexdigest(), 16)
+                color_index = hash_int % len(colors)
+                color = colors[color_index]
+
+            if label == 'id':
+                dot.node(node.hash_name, str(node.id), style="filled", fillcolor=color)
+            elif label == 'name':
+                dot.node(node.hash_name, node.name, style="filled", fillcolor=color)
+            elif label == 'hash_name':
+                dot.node(node.hash_name, node.hash_name, style="filled", fillcolor=color)
+            elif label == 'critical_time':
+                dot.node(node.hash_name, node.critical_time, style="filled", fillcolor=color)
+            elif label == 'execution_time':
+                dot.node(node.hash_name, str(node.execution_time), style="filled", fillcolor=color)
+            else:
+                raise ValueError(f"Unknown label: {label}")
+        for node in draw_nodes:
+            for parent_node in node.parents:
+                dot.edge(parent_node.hash_name, node.hash_name)
+
+        dot.render(filename, format='svg', cleanup=True)        
+
+
+class Group:
+    def __init__(self, cores=0):
+        self.nodes = set()
+        self.cores = cores
+        self.children = []
+        self.pending_nodes = set()
+
+    def add_node(self, node):
+        self.nodes.add(node)
+
+        for child in node.children:
+            child_children_depth = mean([cc.depth for cc in child.children])
+            heappush(self.children, (child_children_depth, id(child), child))
+
+    def consider_child(self):
+        if not self.children:
+            return None
+        return heappop(self.children)[2]
+
+    def remove_node(self, node):
+        self.nodes.remove(node)
+
+    def remove_nodes(self, nodes):
+        self.nodes.difference_update(nodes)
+
     # the closured nodes cannot be inter-reached from the nodes outside the closure
-    def get_group_closure(self, group_nodes):
-        group_closure = group_nodes.copy()
+    def pending_closure(self, new_node):
+        self.pending_nodes = set([new_node])
 
         visited = set()
 
@@ -156,29 +231,51 @@ class Graph:
             visited.add(current_node)
 
             # skip if this node can not reach one of the end nodes
-            if not current_node.reachable_nodes & group_nodes:
+            if not (current_node.reachable_nodes & (self.nodes | self.pending_nodes)):
                 return
 
-            group_closure.add(current_node)
+            self.pending_nodes.add(current_node)
 
             # add parents that are ready
             for parent_node in current_node.parents:
-                # the parent node is not yet scheduled, merge it
-                if not parent_node.end_time:
-                    group_closure.add(parent_node)
+                # the parent node is not yet merged, consider it
+                if parent_node not in self.nodes and not parent_node.group:
+                    self.pending_nodes.add(parent_node)
                     dfs(parent_node)
 
             for child_node in current_node.children:
                 dfs(child_node)
 
-        for part_node in group_nodes:
-            dfs(part_node)
+        # the new node can reach other nodes, while other nodes can reach the new node
+        for n in self.nodes | set([new_node]):
+            dfs(n)
 
-        return group_closure
+        self.pending_nodes -= self.nodes
 
-    def get_group_completion_time(self, group_nodes, num_available_cores):
-        if not group_nodes:
-            return 0
+
+    def merge_pending_nodes(self):
+        for node in self.pending_nodes:
+            self.add_node(node)
+        self.pending_nodes = set()
+        for node in self.nodes:
+            node.group = self
+
+    def revert_pending_nodes(self):
+        self.pending_nodes = set()
+    
+    def get_critical_time(self):
+        return max([node.end_time for node in self.nodes | self.pending_nodes])
+    
+    def get_resource_utilization(self):
+        return sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores)
+
+    def schedule_to_cores(self):
+        if not self.nodes:
+            return
+        
+        group_nodes = self.nodes.copy() | self.pending_nodes.copy()
+
+        num_available_cores = self.cores
 
         for node in group_nodes:
             node.temp_pending_parents = set()
@@ -214,85 +311,17 @@ class Graph:
                         waiting_tasks.remove(child)
 
         assert len(ready_tasks) == len(running_tasks) == len(waiting_tasks) == 0
+        assert max([task.end_time for task in group_nodes]) == critical_time
 
         return critical_time
 
-    def merge_nodes(self, group_nodes):
-        part_topo_order = self.get_topo_order(nodes=group_nodes)
-        for i, part_node in enumerate(part_topo_order):
-            part_node.belongs_to_part = group_nodes
-            if i >= 1:
-                part_node.critical_time = part_topo_order[i - 1].critical_time + part_node.execution_time
-
-        if len(group_nodes) >= 3:
-            # update the downstream critical time
-            downstream_topo_order = self.get_topo_order(start_nodes=group_nodes)
-            downstream_topo_order = deque(set(downstream_topo_order) - group_nodes)
-
-            for node in downstream_topo_order:
-                node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
-
-    def visualize(self, filename="graph", label='id', fill_white=False, draw_nodes=None):
-        print(f"Saving graph to {filename}.svg")
-        dot = Digraph()
-
-        draw_nodes = self.nodes.values() if not draw_nodes else draw_nodes
-
-        for node in draw_nodes:
-            if fill_white:
-                color = 'white'
-            else:
-                hash_object = hashlib.sha256(str(node.group).encode())
-                hash_int = int(hash_object.hexdigest(), 16)
-                color_index = hash_int % len(colors)
-                color = colors[color_index]
-
-            if label == 'id':
-                dot.node(node.hash_name, str(node.id), style="filled", fillcolor=color)
-            elif label == 'name':
-                dot.node(node.hash_name, node.name, style="filled", fillcolor=color)
-            elif label == 'hash_name':
-                dot.node(node.hash_name, node.hash_name, style="filled", fillcolor=color)
-            elif label == 'critical_time':
-                dot.node(node.hash_name, node.critical_time, style="filled", fillcolor=color)
-            elif label == 'execution_time':
-                dot.node(node.hash_name, str(node.execution_time), style="filled", fillcolor=color)
-            else:
-                raise ValueError(f"Unknown label: {label}")
-        for node in draw_nodes:
-            for parent_node in node.parents:
-                dot.edge(parent_node.hash_name, node.hash_name)
-
-        dot.render(filename, format='svg', cleanup=True)        
-
-
-class Group:
-    def __init__(self):
-        self.nodes = set()
-        self.to_consider = []
-        self.critical_time = 0
-
-    def add_node(self, node):
-        self.nodes.add(node)
-
-        for child in node.children:
-            child_children_depth = mean([cc.depth for cc in child.children])
-            heappush(self.to_consider, (child_children_depth, id(child), child))
-
-    def consider_node(self):
-        if not self.to_consider:
-            return None
-        return heappop(self.to_consider)[2]
-
-    def remove_node(self, node):
-        self.nodes.remove(node)
-
     def visualize(self):
-        fig, ax = plt.subplots(figsize=(10, 6))
+        self.schedule_to_cores()
 
+        fig, ax = plt.subplots(figsize=(10, 6))
         group_nodes = sorted(self.nodes, key=lambda task: task.start_time)
 
-        print(f"max end time: {max([task.end_time for task in group_nodes])}")
+        print(f"max time: {max([task.end_time for task in self.nodes])}")
 
         core_end_times = []
         task_core_mapping = []

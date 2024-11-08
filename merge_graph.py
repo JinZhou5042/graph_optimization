@@ -12,7 +12,7 @@ from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
 
 NUM_WORKERS = 4
 NUM_CORES_PER_WORKER = 4
-GROUP_DEPTH = 200   # we hope each group runs in a certain amount of time
+GROUP_DEPTH = 300   # we hope each group runs in a certain amount of time
 
 
 with open('hlg_simplified.json', 'r') as json_in:
@@ -33,34 +33,27 @@ def execute_graph(g):
 
     while ready_nodes:
         ready_node = ready_nodes.popleft()
-        group = Group()
+        group = Group(cores=2)
         group.add_node(ready_node)
 
         i = 0
-        num_available_cores = 2
 
-        while (node_to_consider := group.consider_node()):
-
+        while (child := group.consider_child()):
             # try to merge more nodes
-            group_to_consider = g.get_group_closure(set([node_to_consider, *group.nodes]))
-            critical_time_to_consider = g.get_group_completion_time(group_to_consider, num_available_cores)
+            group.pending_closure(child)
+            group.schedule_to_cores()
 
-            if critical_time_to_consider >= GROUP_DEPTH:
+            # cannot merge this node
+            if group.get_critical_time() <= GROUP_DEPTH:
+                if not len(group.pending_nodes):
+                    continue
+                group.merge_pending_nodes()
+                i += 1
+                print(group.get_critical_time(), group.get_resource_utilization())
+                g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", label='id', draw_nodes=group.nodes)
+            else:
+                group.revert_pending_nodes()
                 continue
-
-            # this group is able to be merged
-            g.critical_time = critical_time_to_consider
-
-            new_nodes = group_to_consider - group.nodes
-
-            for new_node in new_nodes:
-                group.add_node(new_node)
-
-            resource_utilization = sum([node.execution_time for node in group.nodes]) / (g.critical_time * num_available_cores)
-
-            i += 1
-            g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", draw_nodes=group_to_consider, label='id')
-            print(g.critical_time, resource_utilization)
 
         group.visualize()
         exit(1)

@@ -94,7 +94,6 @@ def merge_linear_nodes_topological(parent_of, children_of):
     return parent_of, children_of
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Parse HLG to DAG')
     parser.add_argument('--label', type=str, help='Node label')
