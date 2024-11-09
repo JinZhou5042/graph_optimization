@@ -68,7 +68,9 @@ class Graph:
         for node in self.nodes.values():
             visited = set()
             dfs(node, visited)
-            node.add_reachable_nodes(visited)
+            node.add_reachable_to_nodes(visited)
+            for reachable_node in node.reachable_to_nodes:
+                reachable_node.add_reachable_from_node(node)
 
     def get_num_nodes(self):
         return len(self.nodes)
@@ -87,13 +89,13 @@ class Graph:
 
         def dfs(node):
             for parent in node.parents:
-                parent.remove_reachable_node(node)
+                parent.remove_reachable_to_node(node)
                 dfs(parent)
         dfs(node)
 
         def dfs(node):
             for child in node.children:
-                child.remove_reachable_node(node)
+                child.remove_reachable_from_node(node)
                 dfs(child)
         dfs(node)
 
@@ -231,6 +233,7 @@ class Group:
     # the closured nodes cannot be inter-reached from the nodes outside the closure
     def get_pending_nodes(self, new_node):
         self.pending_nodes = set([new_node])
+        combined_nodes = self.nodes | self.pending_nodes
 
         visited = set()
 
@@ -240,10 +243,11 @@ class Group:
             visited.add(current_node)
 
             # skip if this node can not reach one of the end nodes
-            if not (current_node.reachable_nodes & (self.nodes | self.pending_nodes)):
+            if not (current_node.reachable_to_nodes & combined_nodes):
                 return
 
             self.pending_nodes.add(current_node)
+            combined_nodes.add(current_node)
 
             for child_node in current_node.children:
                 dfs(child_node)
@@ -251,6 +255,9 @@ class Group:
         # the new node can reach other nodes, while other nodes can reach the new node
         for n in self.nodes | set([new_node]):
             dfs(n)
+
+        # don't need it anymore
+        combined_nodes = None
 
         self.pending_nodes -= self.nodes
 
@@ -269,13 +276,11 @@ class Group:
                     outside_parents.append(grandparent)
             self.pending_nodes.add(parent)
 
-
     def merge_pending_nodes(self):
         for node in self.pending_nodes:
             self.add_node(node)
-        self.pending_nodes = set()
-        for node in self.nodes:
             node.group = self
+        self.pending_nodes = set()
 
     def revert_pending_nodes(self):
         self.pending_nodes = set()
@@ -287,6 +292,7 @@ class Group:
         return sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores)
 
     def schedule_to_cores(self):
+        # problamatic!!! should calculate based on cores!!!
         if not self.nodes:
             return
         
@@ -334,19 +340,16 @@ class Group:
     
     def merge_from(self, starting_node):
         self.add_node(starting_node)
+        starting_node.group = self
 
         while (child := self.consider_child()):
-
             # try to merge more nodes
             self.get_pending_nodes(child)
             self.schedule_to_cores()
 
             # cannot merge this node
             if self.get_critical_time() <= self.runtime_limit:
-                if not len(self.pending_nodes):
-                    continue
                 self.merge_pending_nodes()
-                # g.visualize(f"/Users/jinzhou/Downloads/tmp_{i}", label='id', draw_nodes=group.nodes)
             else:
                 self.revert_pending_nodes()
                 continue
@@ -358,8 +361,6 @@ class Group:
 
         fig, ax = plt.subplots(figsize=(10, 6))
         group_nodes = sorted(self.nodes, key=lambda task: task.start_time)
-
-        print(f"max time: {max([task.end_time for task in self.nodes])}")
 
         core_end_times = []
         task_core_mapping = []
@@ -380,11 +381,13 @@ class Group:
 
         for task, core_id in task_core_mapping:
             ax.barh(core_id, task.end_time - task.start_time, left=task.start_time, edgecolor='black')
-            ax.text(task.start_time + (task.end_time - task.start_time) / 2, core_id, f'{task.id}', 
+            ax.text(task.start_time + (task.end_time - task.start_time) / 2, core_id, f'', 
                     va='center', ha='center', color='white')
 
         ax.set_xlabel('Time')
         ax.set_ylabel('Core ID')
+        # x range
+        ax.set_xlim(0, self.runtime_limit)
         ax.set_yticks(range(len(core_end_times)))
         ax.set_yticklabels([f'Core {i}' for i in range(len(core_end_times))])
         plt.title('Task Distribution Across Cores')
@@ -411,7 +414,9 @@ class Node:
         self.critical_time = 0
 
         # the nodes that can be reached from this node
-        self.reachable_nodes = set()
+        self.reachable_to_nodes = set()
+        # the nodes that can reach this node
+        self.reachable_from_nodes = set()
 
         self.group = None
 
@@ -432,15 +437,24 @@ class Node:
 
     def remove_child(self, child):
         self.children.remove(child)
-
-    def add_reachable_node(self, node):
-        self.reachable_nodes.add(node)
     
-    def add_reachable_nodes(self, nodes):
-        self.reachable_nodes.update(nodes)
+    def add_reachable_to_nodes(self, nodes):
+        self.reachable_to_nodes.update(nodes)
 
-    def remove_reachable_node(self, node):
-        self.reachable_nodes.remove(node)
+    def remove_reachable_to_node(self, node):
+        self.reachable_to_nodes.remove(node)
     
-    def remove_reachable_nodes(self, nodes):
-        self.reachable_nodes.difference_update(nodes)
+    def remove_reachable_to_nodes(self, nodes):
+        self.reachable_to_nodes.difference_update(nodes)
+
+    def add_reachable_from_node(self, node):
+        self.reachable_from_nodes.add(node)
+
+    def add_reachable_from_nodes(self, nodes):
+        self.reachable_from_nodes.update(nodes)
+
+    def remove_reachable_from_node(self, node):
+        self.reachable_from_nodes.remove(node)
+    
+    def remove_reachable_from_nodes(self, nodes):
+        self.reachable_from_nodes.difference_update(nodes)
