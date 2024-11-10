@@ -31,10 +31,7 @@ def execute_graph(g):
             ready_nodes.append(node)
 
     while ready_nodes:
-        ready_node = ready_nodes.popleft()
-        group = Group(cores=3, runtime_limit=100)
-
-        group.merge_from(ready_node)
+        group = Group(g, cores=3, runtime_limit=100)
 
         while group.get_resource_utilization() < 0.99 and ready_nodes:
             ready_node = ready_nodes.popleft()
@@ -43,10 +40,8 @@ def execute_graph(g):
 
             print(group.get_critical_time(), group.get_resource_utilization())
 
-        print(group.get_critical_time(), group.get_resource_utilization())
-
-        #g.visualize(f"/Users/jinzhou/Downloads/merged", label='id', draw_nodes=group.nodes)
-        #group.visualize()
+        g.visualize(f"/Users/jinzhou/Downloads/merged", label='id', draw_nodes=group.nodes)
+        group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution")
         exit(1)
 
 execute_graph(g)

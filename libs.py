@@ -25,7 +25,7 @@ def generate_random_colors(num_colors):
 
 colors = generate_random_colors(5000)
 
-EXECUTION_TIME_RANGE = (10, 30)
+EXECUTION_TIME_RANGE = (10, 21)
 SCHEDULING_OVERHEAD = 4000000
 COMMUNICATION_OVERHEAD = 10
 
@@ -197,21 +197,13 @@ class Graph:
 
 
 class Group:
-    def __init__(self, cores=0, runtime_limit=0):
+    def __init__(self, graph, cores=0, runtime_limit=0):
+        self.graph = graph
         self.nodes = set()
         self.cores = cores
         self.runtime_limit = runtime_limit
-        self.children = []
+        self.consider_queue = []
         self.pending_nodes = set()
-
-    def add_node(self, node):
-        self.nodes.add(node)
-
-        for child in node.children:
-            if child in self.nodes or child in self.pending_nodes:
-                continue
-            child_children_depth = mean([cc.depth for cc in child.children]) if child.children else 0
-            heappush(self.children, (child_children_depth, id(child), child))
 
     def set_runtime_limit(self, runtime_limit):
         self.runtime_limit = runtime_limit
@@ -219,10 +211,22 @@ class Group:
     def set_cores(self, cores):
         self.cores = cores
 
-    def consider_child(self):
-        if not self.children:
+    def add_node(self, node):
+        self.nodes.add(node)
+
+        for child in node.children:
+            if child in self.nodes or child in self.pending_nodes:
+                continue
+            self.push_consider_queue(child)
+
+    def push_consider_queue(self, node):
+        child_children_depth = mean([cc.depth for cc in node.children]) if node.children else 0
+        heappush(self.consider_queue, (child_children_depth, id(node), node))
+
+    def pop_consider_queue(self):
+        if not self.consider_queue:
             return None
-        return heappop(self.children)[2]
+        return heappop(self.consider_queue)[2]
 
     def remove_node(self, node):
         self.nodes.remove(node)
@@ -286,9 +290,13 @@ class Group:
         self.pending_nodes = set()
     
     def get_critical_time(self):
+        if not self.nodes:
+            return 0
         return max([node.end_time for node in self.nodes | self.pending_nodes])
     
     def get_resource_utilization(self):
+        if not self.nodes:
+            return 0
         return sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores)
 
     def schedule_to_cores(self):
@@ -304,7 +312,10 @@ class Group:
             node.temp_pending_parents = set()
             node.temp_pending_parents.update(node.pending_parents & group_nodes)
 
-        ready_tasks = [node for node in group_nodes if not node.temp_pending_parents]
+        ready_tasks = []
+        for node in group_nodes:
+            if not node.temp_pending_parents:
+                heappush(ready_tasks, (-node.depth, id(node), node))
         waiting_tasks = [node for node in group_nodes if node.temp_pending_parents]
         running_tasks = []
 
@@ -314,7 +325,7 @@ class Group:
         while ready_tasks or running_tasks:
             # submit as many tasks as possible
             while ready_tasks and num_available_cores:
-                ready_task = ready_tasks.pop(0)
+                _, _, ready_task = heappop(ready_tasks)
                 ready_task.start_time = current_time
                 ready_task.end_time = current_time + ready_task.execution_time
                 heappush(running_tasks, (ready_task.end_time, id(ready_task), ready_task))
@@ -330,7 +341,8 @@ class Group:
                 if child in waiting_tasks:
                     child.temp_pending_parents.discard(finished_task)
                     if not child.temp_pending_parents:
-                        ready_tasks.append(child)
+                        # ready_tasks.append(child)
+                        heappush(ready_tasks, (-child.depth, id(child), child))
                         waiting_tasks.remove(child)
 
         assert len(ready_tasks) == len(running_tasks) == len(waiting_tasks) == 0
@@ -339,24 +351,22 @@ class Group:
         return critical_time
     
     def merge_from(self, starting_node):
-        self.add_node(starting_node)
-        starting_node.group = self
+        self.push_consider_queue(starting_node)
 
-        while (child := self.consider_child()):
+        while (consider_node := self.pop_consider_queue()):
             # try to merge more nodes
-            self.get_pending_nodes(child)
+            self.get_pending_nodes(consider_node)
             self.schedule_to_cores()
 
-            # cannot merge this node
+
             if self.get_critical_time() <= self.runtime_limit:
                 self.merge_pending_nodes()
             else:
                 self.revert_pending_nodes()
-                continue
 
         self.schedule_to_cores()
 
-    def visualize(self):
+    def visualize(self, save_to=None, show=False, label=None):
         self.schedule_to_cores()
 
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -372,7 +382,7 @@ class Group:
                     assigned_core = core_id
                     core_end_times[core_id] = task.end_time 
                     break
-            
+
             if assigned_core is None:
                 assigned_core = len(core_end_times)
                 core_end_times.append(task.end_time)
@@ -381,17 +391,26 @@ class Group:
 
         for task, core_id in task_core_mapping:
             ax.barh(core_id, task.end_time - task.start_time, left=task.start_time, edgecolor='black')
-            ax.text(task.start_time + (task.end_time - task.start_time) / 2, core_id, f'', 
+            if label == 'id':
+                bar_text = f'{task.id}'
+            elif label == 'execution_time':
+                bar_text = f'{task.execution_time}'
+            else:
+                bar_text = ''
+            ax.text(task.start_time + (task.end_time - task.start_time) / 2, core_id, bar_text,
                     va='center', ha='center', color='white')
 
         ax.set_xlabel('Time')
         ax.set_ylabel('Core ID')
         # x range
-        ax.set_xlim(0, self.runtime_limit)
+        # ax.set_xlim(0, self.runtime_limit)
         ax.set_yticks(range(len(core_end_times)))
         ax.set_yticklabels([f'Core {i}' for i in range(len(core_end_times))])
         plt.title('Task Distribution Across Cores')
-        plt.show()
+        if save_to:
+            plt.savefig(save_to)
+        if show:
+            plt.show()
 
 
 class Node:
