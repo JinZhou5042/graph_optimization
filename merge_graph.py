@@ -31,17 +31,19 @@ def execute_graph(g):
             ready_nodes.append(node)
 
     while ready_nodes:
-        group = Group(g, cores=3, runtime_limit=100)
+        group = Group(g, cores=20, runtime_limit=100000)
 
         while group.get_resource_utilization() < 0.99 and ready_nodes:
             ready_node = ready_nodes.popleft()
             if not ready_node.group:
                 group.merge_from(ready_node)
 
-            print(group.get_critical_time(), group.get_resource_utilization())
+            print(len(group.nodes), group.get_critical_time(), group.get_resource_utilization())
+            #print(f"node all time: {sum([node.execution_time for node in group.nodes | group.pending_nodes])}")
+            #print(f"total tiem: {group.get_critical_time() * group.cores}")
 
-        g.visualize(f"/Users/jinzhou/Downloads/merged", label='id', draw_nodes=group.nodes)
         group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution")
+        g.visualize(f"/Users/jinzhou/Downloads/merged", label='id', draw_nodes=group.nodes)
         exit(1)
 
 execute_graph(g)

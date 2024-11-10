@@ -300,7 +300,7 @@ class Group:
         return sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores)
 
     def schedule_to_cores(self):
-        # problamatic!!! should calculate based on cores!!!
+        # cannot find the optimal scheduling algorithm
         if not self.nodes:
             return
         
@@ -308,15 +308,13 @@ class Group:
 
         num_available_cores = self.cores
 
-        for node in group_nodes:
-            node.temp_pending_parents = set()
-            node.temp_pending_parents.update(node.pending_parents & group_nodes)
+        node_num_pending_parents = {node: len(node.pending_parents) for node in group_nodes}
 
         ready_tasks = []
         for node in group_nodes:
-            if not node.temp_pending_parents:
+            if node_num_pending_parents[node] == 0:
                 heappush(ready_tasks, (-node.depth, id(node), node))
-        waiting_tasks = [node for node in group_nodes if node.temp_pending_parents]
+        waiting_tasks = set([node for node in group_nodes if node_num_pending_parents[node] > 0])
         running_tasks = []
 
         current_time = 0
@@ -339,9 +337,8 @@ class Group:
 
             for child in finished_task.children:
                 if child in waiting_tasks:
-                    child.temp_pending_parents.discard(finished_task)
-                    if not child.temp_pending_parents:
-                        # ready_tasks.append(child)
+                    node_num_pending_parents[child] -= 1
+                    if node_num_pending_parents[child] == 0:
                         heappush(ready_tasks, (-child.depth, id(child), child))
                         waiting_tasks.remove(child)
 
@@ -357,7 +354,6 @@ class Group:
             # try to merge more nodes
             self.get_pending_nodes(consider_node)
             self.schedule_to_cores()
-
 
             if self.get_critical_time() <= self.runtime_limit:
                 self.merge_pending_nodes()
@@ -403,7 +399,6 @@ class Group:
         ax.set_xlabel('Time')
         ax.set_ylabel('Core ID')
         # x range
-        # ax.set_xlim(0, self.runtime_limit)
         ax.set_yticks(range(len(core_end_times)))
         ax.set_yticklabels([f'Core {i}' for i in range(len(core_end_times))])
         plt.title('Task Distribution Across Cores')
