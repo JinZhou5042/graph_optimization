@@ -176,7 +176,6 @@ class Graph:
                 hash_int = int(hash_object.hexdigest(), 16)
                 color_index = hash_int % len(colors)
                 color = colors[color_index]
-
             if label == 'id':
                 dot.node(node.hash_name, str(node.id), style="filled", fillcolor=color)
             elif label == 'name':
@@ -197,9 +196,10 @@ class Graph:
 
 
 class Group:
-    def __init__(self, graph, cores=0, runtime_limit=0):
+    def __init__(self, graph, cores=0, runtime_limit=0, id=None):
         self.graph = graph
         self.nodes = set()
+        self.id = id
         self.cores = cores
         self.runtime_limit = runtime_limit
         self.consider_queue = []
@@ -292,30 +292,56 @@ class Group:
     def get_critical_time(self):
         if not self.nodes:
             return 0
-        return max([node.end_time for node in self.nodes | self.pending_nodes])
+        return round(max([node.end_time for node in self.nodes | self.pending_nodes]), 4)
     
     def get_resource_utilization(self):
         if not self.nodes:
             return 0
-        return sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores)
+        return round(sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores), 4)
+
+    def calculate_bottom_reach_time(self):
+        temp_group_nodes = self.nodes.copy() | self.pending_nodes.copy()
+        bottom_reach_time = {}
+        def dfs(node):
+            if node not in temp_group_nodes:
+                return 0
+            if node in bottom_reach_time:
+                return bottom_reach_time[node]
+            
+            max_time_to_leaf = max(
+                (dfs(child) + child.execution_time 
+                for child in node.children if child in temp_group_nodes),
+                default=0
+            )
+            bottom_reach_time[node] = max_time_to_leaf
+            return max_time_to_leaf
+
+        for node in temp_group_nodes:
+            dfs(node)
+
+        return bottom_reach_time
 
     def schedule_to_cores(self):
         # cannot find the optimal scheduling algorithm
         if not self.nodes:
             return
         
-        group_nodes = self.nodes.copy() | self.pending_nodes.copy()
-
-        num_available_cores = self.cores
-
-        node_num_pending_parents = {node: len(node.pending_parents) for node in group_nodes}
-
         ready_tasks = []
-        for node in group_nodes:
-            if node_num_pending_parents[node] == 0:
-                heappush(ready_tasks, (-node.depth, id(node), node))
-        waiting_tasks = set([node for node in group_nodes if node_num_pending_parents[node] > 0])
         running_tasks = []
+        num_available_cores = self.cores
+        temp_group_nodes = self.nodes.copy() | self.pending_nodes.copy()
+        node_num_pending_parents = {node: len(node.pending_parents) for node in temp_group_nodes}
+        waiting_tasks = set([node for node in temp_group_nodes if node_num_pending_parents[node] > 0])
+        num_available_cores = self.cores
+        bottom_reach_time = self.calculate_bottom_reach_time()
+        node_num_pending_parents = {node: len(node.pending_parents) for node in temp_group_nodes}
+
+        def enqueue_ready_tasks(node):
+            heappush(ready_tasks, (-bottom_reach_time[node], id(node), node))
+
+        for node in temp_group_nodes:
+            if node_num_pending_parents[node] == 0:
+                enqueue_ready_tasks(node)
 
         current_time = 0
         critical_time = 0
@@ -339,16 +365,20 @@ class Group:
                 if child in waiting_tasks:
                     node_num_pending_parents[child] -= 1
                     if node_num_pending_parents[child] == 0:
-                        heappush(ready_tasks, (-child.depth, id(child), child))
+                        enqueue_ready_tasks(child)
                         waiting_tasks.remove(child)
 
         assert len(ready_tasks) == len(running_tasks) == len(waiting_tasks) == 0
-        assert max([task.end_time for task in group_nodes]) == critical_time
+        assert max([task.end_time for task in temp_group_nodes]) == critical_time
 
         return critical_time
-    
+
     def merge_from(self, starting_node):
+        if starting_node.group:
+            return
+
         self.push_consider_queue(starting_node)
+        new_group_nodes = set()
 
         while (consider_node := self.pop_consider_queue()):
             # try to merge more nodes
@@ -356,11 +386,13 @@ class Group:
             self.schedule_to_cores()
 
             if self.get_critical_time() <= self.runtime_limit:
+                new_group_nodes.add(consider_node)
+                new_group_nodes.update(self.pending_nodes)
                 self.merge_pending_nodes()
             else:
                 self.revert_pending_nodes()
 
-        self.schedule_to_cores()
+        return new_group_nodes
 
     def visualize(self, save_to=None, show=False, label=None):
         self.schedule_to_cores()

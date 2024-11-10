@@ -18,79 +18,52 @@ with open('hlg_simplified.json', 'r') as json_in:
     loaded_children_of = json.load(json_in)
     children_of = {key: set(value) for key, value in loaded_children_of.items()}
 
-g = Graph(children_of)
+graph = Graph(children_of)
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
 
-def execute_graph(g):
+def execute_graph(graph):
 
-    ready_nodes = deque()
-    for node in g.nodes.values():
+    ready_nodes = []
+    for node in graph.nodes.values():
         if not node.pending_parents:
             ready_nodes.append(node)
 
+    print(f"all nodes: {len(graph.nodes)}")
+
+    group_id = 0
+    groups = []
+
     while ready_nodes:
-        group = Group(g, cores=20, runtime_limit=100000)
+        group_id += 1
+        group = Group(graph, cores=1, runtime_limit=10000, id=group_id)
+        groups.append(group)
 
-        while group.get_resource_utilization() < 0.99 and ready_nodes:
-            ready_node = ready_nodes.popleft()
-            if not ready_node.group:
-                group.merge_from(ready_node)
+        for ready_node in ready_nodes:
+            if group.get_resource_utilization() > 0.99:
+                break
 
-            print(len(group.nodes), group.get_critical_time(), group.get_resource_utilization())
-            #print(f"node all time: {sum([node.execution_time for node in group.nodes | group.pending_nodes])}")
-            #print(f"total tiem: {group.get_critical_time() * group.cores}")
+            new_group_nodes = group.merge_from(ready_node)
 
-        group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution")
-        g.visualize(f"/Users/jinzhou/Downloads/merged", label='id', draw_nodes=group.nodes)
-        exit(1)
+            if new_group_nodes:
+                for new_group_node in new_group_nodes:
+                    if new_group_node in ready_nodes:
+                        ready_nodes.remove(new_group_node)
+                    for new_group_node_child in new_group_node.children:
+                        new_group_node_child.pending_parents.remove(new_group_node)
+                        if not new_group_node_child.group and not new_group_node_child.pending_parents:
+                            ready_nodes.append(new_group_node_child)
 
-execute_graph(g)
+        print(len(group.nodes), group.get_critical_time(), group.get_resource_utilization())
+        group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
+        graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
 
-
-def merge_graph(g):
-    print(f"size of graph: {g.get_num_nodes()}")
-
-    topo_order = g.get_topo_order()
-
-    while topo_order:
-        # can we merge this node and all its parents?
-        current_node = topo_order.popleft()
-
-        # skip if already merged: 1. it belongs to a merged part; 2. it is a part itself
-        if current_node.belongs_to_part:
-            continue
-
-        # consider those children that have not been merged yet
-        part_nodes = set([current_node])
-        part_children = deque()
-        part_children.extendleft(current_node.children)
-
-        part_start_time = current_node.critical_time
-
-        while part_children:
-            child_node = part_children.popleft()
-            if child_node.belongs_to_part:
-                continue
-
-            # when considering a child node, we are considering the closure of the child node and the parts
-            temp_part_nodes = g.get_group_closure(set([child_node, *part_nodes]))
-            to_be_merged_nodes = set(temp_part_nodes) - part_nodes
-
-            t_keep = max([node.critical_time for node in temp_part_nodes]) - part_start_time + SCHEDULING_OVERHEAD * len(to_be_merged_nodes)
-            t_merge = sum([node.execution_time for node in temp_part_nodes])
-
-            if t_merge <= t_keep:
-                part_nodes.update(temp_part_nodes)
-                g.merge_nodes(part_nodes)
-
-                for added_node in to_be_merged_nodes:
-                    part_children.extendleft(added_node.children)
-
-        print(f"part_nodes: {len(part_nodes)}")
+    assert sum([len(group.nodes) for group in groups]) == len(graph.nodes)
+    graph.visualize(f"/Users/jinzhou/Downloads/group_merged_", label='id')
 
 
-#merge_graph(g)
+execute_graph(graph)
 
-#g.visualize('/Users/jinzhou/Downloads/merged_hlg')
+
+# graph.visualize('/Users/jinzhou/Downloads/merged_hlg')
