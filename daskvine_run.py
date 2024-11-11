@@ -28,7 +28,7 @@ def compute(hlg, keys):
     m.tune("transfer-temps-recovery", 1)
 
     computed = m.get(hlg, keys, collapse_hlg=False, resources={"cores": 1}, env_vars={'PATH': '/scratch365/jzhou24/env/bin/:$PATH'})
-    
+
     full_stop = time.time()
     print('full run time is ' + str((full_stop - full_start) / 60))
 
@@ -51,5 +51,5 @@ if __name__ == "__main__":
         else:
             print(f"error: {k}")
             exit(1)
-    
+
     compute(hlg, keys)

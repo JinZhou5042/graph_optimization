@@ -131,12 +131,10 @@ if __name__ == "__main__":
             dot.edge(parent, child)
     pbar.close()
 
-    output_file = '/Users/jinzhou/Downloads/expanded_hlg'
-    dot.render(output_file, format='svg', view=False, cleanup=True)
-    print(f"Saved DAG to {output_file}.svg")
+    #output_file = '/Users/jinzhou/Downloads/expanded_hlg'
+    #dot.render(output_file, format='svg', view=False, cleanup=True)
+    #print(f"Saved DAG to {output_file}.svg")
 
-
-    exit(1)
     # =================================================================
 
     # duplicate the nodes with multiple children
@@ -169,6 +167,6 @@ if __name__ == "__main__":
     pbar.close()
 
 
-    output_file = '/Users/jinzhou/Downloads/expanded_hlg_duplicated'
-    dot_2.render(output_file, format='svg', view=False, cleanup=True)
-    print(f"Saved DAG to {output_file}.svg")
+    # output_file = '/Users/jinzhou/Downloads/expanded_hlg_duplicated'
+    # dot_2.render(output_file, format='svg', view=False, cleanup=True)
+    # print(f"Saved DAG to {output_file}.svg")

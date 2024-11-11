@@ -205,6 +205,9 @@ class Group:
         self.consider_queue = []
         self.pending_nodes = set()
 
+        self.parents = set()
+        self.children = set()
+
     def set_runtime_limit(self, runtime_limit):
         self.runtime_limit = runtime_limit
 
