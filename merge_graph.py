@@ -22,7 +22,6 @@ graph = Graph(children_of)
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
-
 def execute_graph(graph):
 
     ready_nodes = []
@@ -37,7 +36,7 @@ def execute_graph(graph):
 
     while ready_nodes:
         group_id += 1
-        group = Group(graph, cores=1, runtime_limit=10000, id=group_id)
+        group = Group(graph, cores=3, runtime_limit=3000, id=group_id)
         groups.append(group)
 
         for ready_node in ready_nodes:
