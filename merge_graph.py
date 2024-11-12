@@ -14,16 +14,23 @@ from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
 NUM_WORKERS = 4
 NUM_CORES_PER_WORKER = 4
 
+# with open('simplified_hlg.json', 'r') as json_in:
+#     loaded_children_of = json.load(json_in)
+#     children_of = {key: set(value) for key, value in loaded_children_of.items()}
+
+# graph = Graph(children_of)
+
 
 with open("expanded_hlg.pkl", "rb") as f:
-    loaded_dag = cloudpickle.load(f)
-    print(loaded_dag)
+    hlg = cloudpickle.load(f)
 
-with open('simplified_hlg.json', 'r') as json_in:
-    loaded_children_of = json.load(json_in)
-    children_of = {key: set(value) for key, value in loaded_children_of.items()}
+    all_tasks = {}
+    for layer_name, layer in hlg.layers.items():
+        for key, sexpr in layer.items():
+            all_tasks[key] = sexpr
 
-graph = Graph(children_of)
+    print(len(all_tasks))
+    graph = Graph(all_tasks)
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
@@ -41,7 +48,7 @@ def execute_graph(graph):
 
     while ready_nodes:
         group_id += 1
-        group = Group(graph, cores=1, runtime_limit=2000, id=group_id)
+        group = Group(graph, cores=1, runtime_limit=4000, id=group_id)
         groups.append(group)
 
         for ready_node in ready_nodes:
@@ -68,4 +75,4 @@ def execute_graph(graph):
 execute_graph(graph)
 
 
-# graph.visualize('/Users/jinzhou/Downloads/merged_hlg')
+graph.visualize('merged_hlg')

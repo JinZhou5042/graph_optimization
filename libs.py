@@ -6,6 +6,7 @@ from heapq import heappush, heappop
 import hashlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from collections.abc import Hashable
 from heapq import heappush, heappop
 from graphviz import Digraph
 import numpy as np
@@ -35,19 +36,45 @@ def hash_name(*args):
         out_str += str(arg)
     return hashlib.sha256(out_str.encode('utf-8')).hexdigest()[:12]
 
+def hashable(s):
+    try:
+        hash(s)
+        return True
+    except TypeError:
+        return False
+
 
 class Graph:
-    def __init__(self, children_of):
+    def __init__(self, hlg):
         self.nodes = {}
         self.max_node_id = 0
 
+        self.hlg_keys = set(hlg.keys())
+
         # initialize each node
-        for node_name, children_names in children_of.items():
-            node = self.add_node(node_name)
-            for child_name in children_names:
-                child_node = self.add_node(child_name)
-                node.add_child(child_node)
-                child_node.add_parent(node)
+        def find_parent_keys(sexpr):
+            parent_keys = set()
+            if isinstance(sexpr, str):
+                if sexpr in self.hlg_keys:
+                    parent_keys.add(sexpr)
+            elif isinstance(sexpr, list):
+                for item in sexpr:
+                    parent_keys.update(find_parent_keys(item))
+            elif isinstance(sexpr, tuple):
+                if hashable(sexpr) and sexpr in self.hlg_keys:
+                    parent_keys.add(sexpr)
+                else:
+                    for item in sexpr:
+                        parent_keys.update(find_parent_keys(item))
+            return parent_keys
+
+        for key, sexpr in hlg.items():
+            node = self.add_node(key)
+            parent_keys = find_parent_keys(sexpr)
+            for parent_key in parent_keys:
+                parent_node = self.add_node(parent_key)
+                node.add_parent(parent_node)
+                parent_node.add_child(node)
 
         # initialize the critical time of each node
         topo_order = self.get_topo_order()
@@ -76,6 +103,8 @@ class Graph:
         return len(self.nodes)
 
     def add_node(self, node_name):
+        if isinstance(node_name, list):
+            exit(1)
         if node_name in self.nodes.keys():
             return self.nodes[node_name]
         self.max_node_id += 1
@@ -205,8 +234,17 @@ class Group:
         self.consider_queue = []
         self.pending_nodes = set()
 
-        self.parents = set()
-        self.children = set()
+    def get_parents(self):
+        parents = set()
+        for node in self.nodes:
+            parents.update(node.parents)
+        return parents
+
+    def get_children(self):
+        children = set()
+        for node in self.nodes:
+            children.update(node.children)
+        return children
 
     def set_runtime_limit(self, runtime_limit):
         self.runtime_limit = runtime_limit
@@ -299,6 +337,8 @@ class Group:
     
     def get_resource_utilization(self):
         if not self.nodes:
+            return 0
+        if not self.get_critical_time():
             return 0
         return round(sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores), 4)
 
