@@ -11,6 +11,7 @@ import os
 import warnings
 import scipy
 import cloudpickle
+from rich import print
 import inspect
 import dask_awkward.lib.structure
 
@@ -27,7 +28,7 @@ def compute(hlg, keys):
 
     m.tune("transfer-temps-recovery", 1)
 
-    computed = m.get(hlg, keys, collapse_hlg=False, resources={"cores": 1}, env_vars={'PATH': '/scratch365/jzhou24/env/bin/:$PATH'})
+    computed = m.get(hlg, keys, resources={"cores": 1}, env_vars={'PATH': '/scratch365/jzhou24/env/bin/:$PATH'})
 
     full_stop = time.time()
     print('full run time is ' + str((full_stop - full_start) / 60))
@@ -47,9 +48,11 @@ if __name__ == "__main__":
             pass
             # print(v)
         elif isinstance(v, tuple):
-            print(v[0], type(v[0]))
+            pass
         else:
             print(f"error: {k}")
             exit(1)
+
+        
 
     compute(hlg, keys)

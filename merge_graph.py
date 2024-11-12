@@ -7,6 +7,7 @@ from heapq import heappush, heappop
 from graphviz import Digraph
 import heapq
 import numpy as np
+from rich import print
 import queue
 import ndcctools.taskvine as vine
 import cloudpickle
@@ -29,6 +30,8 @@ with open("expanded_hlg.pkl", "rb") as f:
     for layer_name, layer in hlg.layers.items():
         for key, sexpr in layer.items():
             all_tasks[key] = sexpr
+            if key == "fd71aeb830fa":
+                print(sexpr)
 
     graph = Graph(all_tasks)
 
@@ -43,6 +46,8 @@ def execute_group(group):
     input_files = {group_parent.result_file: None for group_parent in group.get_parents()}
     
     for input_file in input_files.keys():
+        if not input_file:
+            continue
         assert isinstance(input_file, vine.File)
 
         try:
@@ -53,9 +58,42 @@ def execute_group(group):
 
     def rec_call(sexpr):
         if group.graph.is_key(sexpr):
-            pass
-    
+            if sexpr in input_files.keys():
+                return input_files[sexpr]
+            for n in group.nodes:
+                if sexpr == n.key:
+                    return n.result_file
+        if isinstance(sexpr, list):
+            return [rec_call(item) for item in sexpr]
+        if isinstance(sexpr, tuple) and callable(sexpr[0]):
+            return sexpr[0](*[rec_call(item) for item in sexpr[1:]])
+        else:
+            return sexpr
 
+    num_pending_parents = {task: 0 for task in group.nodes}
+    for task in group.nodes:
+        for parent in task.parents:
+            if parent in group.nodes:
+                num_pending_parents[task] += 1
+
+    ready_tasks = [task for task in group.nodes if num_pending_parents[task] == 0]
+    waiting_tasks = [task for task in group.nodes if num_pending_parents[task] != 0]
+    running_tasks = []
+
+    while ready_tasks or running_tasks:
+        # run a task
+        task = ready_tasks.pop(0)
+        task.result_file = rec_call(task.sexpr)
+        print(type(task.result_file))
+        # submit more tasks
+        for child in task.children:
+            if child in waiting_tasks:
+                num_pending_parents[child] -= 1
+                if num_pending_parents[child] == 0:
+                    ready_tasks.append(child)
+                    waiting_tasks.remove(child)
+
+        #print(f"res = {task.result_file}")
 
 def enqueue_group(group):
     print(f"group size: {len(group.nodes)}")
@@ -104,8 +142,8 @@ def execute_graph(graph):
         #group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
         #graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
         #enqueue_group(group)
-
-        #exit(1)
+        execute_group(group)
+        exit(1)
 
 
     assert sum([len(group.nodes) for group in groups]) == len(graph.nodes)

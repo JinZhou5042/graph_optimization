@@ -50,7 +50,7 @@ class Graph:
             node = self.add_node(key, sexpr)
             parent_keys = self.find_hlg_keys(sexpr)
             for parent_key in parent_keys:
-                parent_node = self.add_node(parent_key, sexpr)
+                parent_node = self.add_node(parent_key, hlg[parent_key])
                 node.add_parent(parent_node)
                 parent_node.add_child(node)
 
@@ -367,6 +367,7 @@ class Group:
         ready_tasks = []
         running_tasks = []
         num_available_cores = self.cores
+
         temp_group_nodes = self.nodes.copy() | self.pending_nodes.copy()
         node_num_pending_parents = {node: len(node.pending_parents) for node in temp_group_nodes}
         waiting_tasks = set([node for node in temp_group_nodes if node_num_pending_parents[node] > 0])
