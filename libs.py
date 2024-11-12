@@ -36,13 +36,6 @@ def hash_name(*args):
         out_str += str(arg)
     return hashlib.sha256(out_str.encode('utf-8')).hexdigest()[:12]
 
-def hashable(s):
-    try:
-        hash(s)
-        return True
-    except TypeError:
-        return False
-
 
 class Graph:
     def __init__(self, hlg):
@@ -50,29 +43,14 @@ class Graph:
         self.max_node_id = 0
 
         self.hlg_keys = set(hlg.keys())
+        self.compute_keys = set()
 
         # initialize each node
-        def find_parent_keys(sexpr):
-            parent_keys = set()
-            if isinstance(sexpr, str):
-                if sexpr in self.hlg_keys:
-                    parent_keys.add(sexpr)
-            elif isinstance(sexpr, list):
-                for item in sexpr:
-                    parent_keys.update(find_parent_keys(item))
-            elif isinstance(sexpr, tuple):
-                if hashable(sexpr) and sexpr in self.hlg_keys:
-                    parent_keys.add(sexpr)
-                else:
-                    for item in sexpr:
-                        parent_keys.update(find_parent_keys(item))
-            return parent_keys
-
         for key, sexpr in hlg.items():
-            node = self.add_node(key)
-            parent_keys = find_parent_keys(sexpr)
+            node = self.add_node(key, sexpr)
+            parent_keys = self.find_hlg_keys(sexpr)
             for parent_key in parent_keys:
-                parent_node = self.add_node(parent_key)
+                parent_node = self.add_node(parent_key, sexpr)
                 node.add_parent(parent_node)
                 parent_node.add_child(node)
 
@@ -99,22 +77,42 @@ class Graph:
             for reachable_node in node.reachable_to_nodes:
                 reachable_node.add_reachable_from_node(node)
 
+    def is_key(self, s):
+        try:
+            hash(s)
+            if s in self.hlg_keys:
+                return True
+            else:
+                return False
+        except TypeError:
+            return False
+
+    def find_hlg_keys(self, sexpr):
+        parent_keys = set()
+        if self.is_key(sexpr):
+            parent_keys.add(sexpr)
+
+        if isinstance(sexpr, (list, tuple)):
+            for item in sexpr:
+                parent_keys.update(self.find_hlg_keys(item))
+        return parent_keys
+
     def get_num_nodes(self):
         return len(self.nodes)
 
-    def add_node(self, node_name):
-        if isinstance(node_name, list):
+    def add_node(self, key, sexpr):
+        if isinstance(key, list):
             exit(1)
-        if node_name in self.nodes.keys():
-            return self.nodes[node_name]
+        if key in self.nodes.keys():
+            return self.nodes[key]
         self.max_node_id += 1
-        node = Node(node_name, self.max_node_id, random.randint(*EXECUTION_TIME_RANGE), SCHEDULING_OVERHEAD)
-        self.nodes[node_name] = node
+        node = Node(key, sexpr, self.max_node_id, random.randint(*EXECUTION_TIME_RANGE), SCHEDULING_OVERHEAD)
+        self.nodes[key] = node
 
         return node
 
-    def remove_node(self, node_name):
-        node = self.nodes[node_name]
+    def remove_node(self, key):
+        node = self.nodes[key]
 
         def dfs(node):
             for parent in node.parents:
@@ -134,7 +132,7 @@ class Graph:
         for child in node.children:
             child.remove_parent(node)
     
-        del self.nodes[node_name]
+        del self.nodes[key]
 
     def get_topo_order(self, start_node=None, start_nodes=None, nodes=None):
         # start_node: start from this node and all of its children
@@ -207,8 +205,8 @@ class Graph:
                 color = colors[color_index]
             if label == 'id':
                 dot.node(node.hash_name, str(node.id), style="filled", fillcolor=color)
-            elif label == 'name':
-                dot.node(node.hash_name, node.name, style="filled", fillcolor=color)
+            elif label == 'key':
+                dot.node(node.hash_name, node.key, style="filled", fillcolor=color)
             elif label == 'hash_name':
                 dot.node(node.hash_name, node.hash_name, style="filled", fillcolor=color)
             elif label == 'critical_time':
@@ -245,9 +243,6 @@ class Group:
         for node in self.nodes:
             children.update(node.children)
         return children
-
-    def set_runtime_limit(self, runtime_limit):
-        self.runtime_limit = runtime_limit
 
     def set_cores(self, cores):
         self.cores = cores
@@ -435,6 +430,7 @@ class Group:
             else:
                 self.revert_pending_nodes()
 
+        self.schedule_to_cores()
         return new_group_nodes
 
     def visualize(self, save_to=None, show=False, label=None):
@@ -484,14 +480,15 @@ class Group:
 
 
 class Node:
-    def __init__(self, name, id, execution_time, scheduling_overhead):
+    def __init__(self, key, sexpr, id, execution_time, scheduling_overhead):
         # must be initialized
-        self.name = name
+        self.key = key
+        self.sexpr = sexpr
         self.id = id
         self.execution_time = execution_time
         self.scheduling_overhead = scheduling_overhead
 
-        self.hash_name = hash_name(name)
+        self.hash_name = hash_name(key)
 
         self.children = set()
         self.parents = set()
@@ -513,6 +510,8 @@ class Node:
         self.end_time = 0
 
         self.depth = 0
+
+        self.result_file = None
 
     def add_parent(self, parent):
         self.parents.add(parent)
