@@ -607,7 +607,7 @@ def execute_group(group):
         if hash(sexpr) and sexpr in group.parents:
             return input_files[sexpr]
         if hash(sexpr) and sexpr in group.keys:
-            return group.node_of(sexpr).result_file
+            return group.result_of[sexpr]
 
         if isinstance(sexpr, list):
             return [rec_call(item) for item in sexpr]
@@ -616,27 +616,17 @@ def execute_group(group):
         else:
             return sexpr
 
-    num_pending_parents = {k: 0 for k in group.keys}
-    for k in group.keys:
-        for parent in group.graph.nodes[k].parents:
-            if parent in group.keys:
-                num_pending_parents[k] += 1
-
-    ready_tasks = [k for k in group.keys if num_pending_parents[k] == 0]
-    waiting_tasks = [k for k in group.keys if num_pending_parents[k] != 0]
-    running_tasks = []
-
-    while ready_tasks or running_tasks:
+    while group.ready_keys:
         # run a task
-        k = ready_tasks.pop(0)
-        group.node_of(k).result_file = rec_call(group.node_of(k).sexpr)
+        k = group.ready_keys.pop(0)
+        group.result_of[k] = rec_call(group.sexpr_of[k])
         # submit more tasks
-        for child in group.children_of(k):
-            if child in waiting_tasks:
-                num_pending_parents[child] -= 1
-                if num_pending_parents[child] == 0:
-                    ready_tasks.append(child)
-                    waiting_tasks.remove(child)
+        for child in group.children_of[k]:
+            if child in group.waiting_keys:
+                group.num_pending_parents[child] -= 1
+                if group.num_pending_parents[child] == 0:
+                    group.ready_keys.append(child)
+                    group.waiting_keys.remove(child)
 
     return group
 
@@ -687,17 +677,26 @@ def execute_graph(graph):
         print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
         #group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
         #graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
-        #enqueue_group(group)
-        # execute_group(group)
-
-        # print(group.nodes)
-        # group.nodes = None
 
         # executed_group = execute_group(group)
 
-        # cloudpickle dump the group
+        class SimpleGroup:
+            def __init__(self, graph, group):
+                self.keys = group.keys
+                self.sexpr_of = {k: graph.node_of(k).sexpr for k in group.keys}
+                self.parents = group.parents
+                self.children = group.children
+                self.children_of = {k: group.children_of(k) for k in group.keys}
+                self.parents_of = {k: group.parents_of(k) for k in group.keys}
+                self.pending_parents = self.parents_of.copy()
+                self.result_of = {k: None for k in group.keys}
+                self.num_pending_parents = {k: sum(1 for p in self.parents_of[k] if p in self.keys) for k in self.keys}
+                self.ready_keys = [k for k in self.keys if self.num_pending_parents[k] == 0]
+                self.waiting_keys = [k for k in self.keys if self.num_pending_parents[k] > 0]
 
-        t = vine.FunctionCall('dask-library', 'execute_group', group)
+        simple_group = SimpleGroup(graph, group)
+
+        t = vine.FunctionCall('dask-library', 'execute_group', simple_group)
         q.submit(t)
 
         while not q.empty():
