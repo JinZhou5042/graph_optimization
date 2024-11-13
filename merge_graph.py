@@ -3,17 +3,22 @@ from collections import defaultdict
 from collections import deque
 import json
 import hashlib
+import sys
 from heapq import heappush, heappop
 import time
 from graphviz import Digraph
 import heapq
 import ndcctools.taskvine as vine
+from pprint import pprint
 from tqdm import tqdm
 import numpy as np
 from rich import print
 import queue
 import cloudpickle
-from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
+from libs import Graph, Node, SCHEDULING_OVERHEAD, Group, TGroup
+
+import sys
+
 
 NUM_WORKERS = 4
 NUM_CORES_PER_WORKER = 4
@@ -32,8 +37,6 @@ with open("expanded_hlg.pkl", "rb") as f:
     for layer_name, layer in hlg.layers.items():
         for key, sexpr in layer.items():
             all_tasks[key] = sexpr
-            if key == "fd71aeb830fa":
-                print(sexpr)
 
     graph = Graph(all_tasks)
 
@@ -44,7 +47,20 @@ with open("keys.pkl", "rb") as f:
 
 enqueued_groups = []
 
-def execute_group(graph, group):
+
+def execute_group(group):
+    group_parents = group.get_parents()
+
+    def is_key(s, nodes):
+        try:
+            hash(s)
+            if s in [node.key for node in nodes]:
+                return True
+            else:
+                return False
+        except TypeError:
+            return False
+        
     input_files = {group_parent.result_file: None for group_parent in group.get_parents()}
     
     for input_file in input_files.keys():
@@ -59,12 +75,14 @@ def execute_group(graph, group):
             raise
 
     def rec_call(sexpr):
-        if graph.is_key(sexpr):
+        if is_key(sexpr, group_parents):
             if sexpr in input_files.keys():
                 return input_files[sexpr]
+        elif is_key(sexpr, group.nodes):
             for n in group.nodes:
                 if sexpr == n.key:
                     return n.result_file
+                
         if isinstance(sexpr, list):
             return [rec_call(item) for item in sexpr]
         if isinstance(sexpr, tuple) and callable(sexpr[0]):
@@ -101,10 +119,10 @@ def execute_group(graph, group):
 
 def execute_graph(graph):
 
-    ready_nodes = []
-    for node in graph.nodes.values():
-        if not node.pending_parents:
-            ready_nodes.append(node)
+    ready_keys = []
+    for k, n in graph.nodes.items():
+        if not n.pending_parents:
+            ready_keys.append(k)
 
     print(f"all nodes: {len(graph.nodes)}")
 
@@ -115,46 +133,39 @@ def execute_graph(graph):
     libtask = q.create_library_from_functions('dask-library', execute_group, add_env=False)
     q.install_library(libtask)
 
-    # pbar = tqdm(total=len(ready_nodes))
 
-    while ready_nodes:
+    while ready_keys:
         group_id += 1
-        group = Group(cores=1, runtime_limit=5000, id=group_id)
+        group = Group(graph, cores=1, runtime_limit=5000, id=group_id)
         groups.append(group)
 
-        for ready_node in ready_nodes:
+        for ready_key in ready_keys:
             if group.get_resource_utilization() > 0.99:
                 break
 
-            new_group_nodes = group.merge_from(ready_node)
+            new_keys = group.merge_from(ready_key)
 
-            if new_group_nodes:
-                for new_group_node in new_group_nodes:
-                    if new_group_node in ready_nodes:
-                        ready_nodes.remove(new_group_node)
-                    for new_group_node_child in new_group_node.children:
-                        new_group_node_child.pending_parents.remove(new_group_node)
-                        if not new_group_node_child.group and not new_group_node_child.pending_parents:
-                            ready_nodes.append(new_group_node_child)
+            if new_keys:
+                for new_key in new_keys:
+                    if new_key in ready_keys:
+                        ready_keys.remove(new_key)
+                    for new_key_child in graph.nodes[new_key].children:
+                        graph.nodes[new_key_child].pending_parents.remove(new_key)
+                        if not graph.nodes[new_key_child].group and not graph.nodes[new_key_child].pending_parents:
+                            ready_keys.append(new_key_child)
 
-        print(len(group.nodes), group.get_critical_time(), group.get_resource_utilization())
+        print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
         #group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
         #graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
         #enqueue_group(group)
         # execute_group(group)
 
         # print(group.nodes)
-        group.nodes = None
-        group.pending_nodes = None
-        group.consider_queue = None
-        group.consider_queu = None
+        # group.nodes = None
 
-        t = vine.FunctionCall('dask-library', 'execute_group', group)
-        q.submit(t)
 
-        exit(1)
 
-    assert sum([len(group.nodes) for group in groups]) == len(graph.nodes)
+    assert sum([len(group.keys) for group in groups]) == len(graph.nodes)
 
 execute_graph(graph)
 

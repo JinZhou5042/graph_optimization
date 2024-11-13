@@ -7,7 +7,6 @@ import hashlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from collections.abc import Hashable
-from heapq import heappush, heappop
 from graphviz import Digraph
 import numpy as np
 from copy import deepcopy
@@ -47,35 +46,36 @@ class Graph:
 
         # initialize each node
         for key, sexpr in hlg.items():
-            node = self.add_node(key, sexpr)
+            self.add_node(key, sexpr)
             parent_keys = self.find_hlg_keys(sexpr)
             for parent_key in parent_keys:
-                parent_node = self.add_node(parent_key, hlg[parent_key])
-                node.add_parent(parent_node)
-                parent_node.add_child(node)
+                self.add_node(parent_key, hlg[parent_key])
+                self.nodes[key].add_parent(parent_key)
+                self.nodes[parent_key].add_child(key)
 
         # initialize the critical time of each node
         topo_order = self.get_topo_order()
-        for node in topo_order:
-            if not node.parents:
-                node.critical_time = node.execution_time
-                node.depth = 0
+        for k in topo_order:
+            if not self.nodes[k].parents:
+                self.nodes[k].critical_time = self.nodes[k].execution_time
+                self.nodes[k].depth = 0
             else:
-                node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
-                node.depth = max([parent.depth for parent in node.parents]) + 1
+                self.nodes[k].critical_time = max([self.nodes[parent].critical_time for parent in self.nodes[k].parents]) + self.nodes[k].execution_time
+                self.nodes[k].depth = max([self.nodes[parent].depth for parent in self.nodes[k].parents]) + 1
 
-        # initialize the reachable nodes from each node
-        def dfs(node, visited):
-            for child_node in node.children:
-                if child_node not in visited:
-                    visited.add(child_node)
-                    dfs(child_node, visited)
-        for node in self.nodes.values():
+        # initialize the reachable keys
+        def dfs(k, visited):
+            for child in self.nodes[k].children:
+                if child not in visited:
+                    visited.add(child)
+                    dfs(child, visited)
+        for k in self.nodes.keys():
             visited = set()
-            dfs(node, visited)
-            node.add_reachable_to_nodes(visited)
-            for reachable_node in node.reachable_to_nodes:
-                reachable_node.add_reachable_from_node(node)
+            dfs(k, visited)
+
+            self.nodes[k].add_can_reach_to([v for v in visited])
+            for kk in self.nodes[k].can_reach_to:
+                self.nodes[kk].can_be_reached_from(k)
 
     def is_key(self, s):
         try:
@@ -105,48 +105,21 @@ class Graph:
             exit(1)
         if key in self.nodes.keys():
             return self.nodes[key]
+
         self.max_node_id += 1
         node = Node(key, sexpr, self.max_node_id, random.randint(*EXECUTION_TIME_RANGE), SCHEDULING_OVERHEAD)
         self.nodes[key] = node
 
         return node
 
-    def remove_node(self, key):
-        node = self.nodes[key]
+    def get_topo_order(self, start_key=None, start_keys=None, keys=None):
+        if keys and start_key:
+            raise ValueError("keys and start_key cannot be used together")
 
-        def dfs(node):
-            for parent in node.parents:
-                parent.remove_reachable_to_node(node)
-                dfs(parent)
-        dfs(node)
-
-        def dfs(node):
-            for child in node.children:
-                child.remove_reachable_from_node(node)
-                dfs(child)
-        dfs(node)
-
-        # remove the node
-        for parent in node.parents:
-            parent.remove_child(node)
-        for child in node.children:
-            child.remove_parent(node)
-    
-        del self.nodes[key]
-
-    def get_topo_order(self, start_node=None, start_nodes=None, nodes=None):
-        # start_node: start from this node and all of its children
-        # nodes: only consider these nodes in the graph
-
-        if nodes and start_node:
-            raise ValueError("node_names and start_node cannot be used together")
-
-        if nodes:
-            if not nodes.issubset(self.nodes.values()):
-                raise ValueError("node_names must be subset of the graph")
-            nodes_to_sort = nodes
+        if keys:
+            keys_to_sort = keys
         else:
-            nodes_to_sort = self.nodes.values()
+            keys_to_sort = self.nodes.keys()
 
         visited = set()
         stack = []
@@ -155,21 +128,21 @@ class Graph:
             if u in visited:
                 return
             visited.add(u)
-            for v in u.children:
+            for v in self.nodes[u].children:
                 dfs(v)
-            if u in nodes_to_sort:
+            if u in keys_to_sort:
                 stack.append(u)
             return
 
-        if start_node:
-            dfs(start_node)
-        elif start_nodes:
-            for node in start_nodes:
-                dfs(node)
+        if start_key:
+            dfs(start_key)
+        elif start_keys:
+            for k in start_keys:
+                dfs(k)
         else:
-            for node in nodes_to_sort:
-                if node not in visited:
-                    dfs(node)
+            for k in keys_to_sort:
+                if k not in visited:
+                    dfs(k)
 
         return deque(stack[::-1])
 
@@ -182,7 +155,7 @@ class Graph:
 
         if len(group_nodes) >= 3:
             # update the downstream critical time
-            downstream_topo_order = self.get_topo_order(start_nodes=group_nodes)
+            downstream_topo_order = self.get_topo_order(start_keys=group_nodes)
             downstream_topo_order = deque(set(downstream_topo_order) - group_nodes)
 
             for node in downstream_topo_order:
@@ -223,13 +196,17 @@ class Graph:
 
 
 class Group:
-    def __init__(self, cores=0, runtime_limit=0, id=None):
-        self.nodes = set()
+    def __init__(self, graph, cores=0, runtime_limit=0, id=None):
+        # self.nodes = set()
+        self.graph = graph
+
+        self.keys = set()
+        
         self.id = id
         self.cores = cores
         self.runtime_limit = runtime_limit
         self.consider_queue = []
-        self.pending_nodes = set()
+        self.pending_keys = set()
 
     def get_parents(self):
         parents = set()
@@ -239,201 +216,205 @@ class Group:
 
     def get_children(self):
         children = set()
-        for node in self.nodes:
+        for node in self.nodes.keys():
             children.update(node.children)
         return children
 
     def set_cores(self, cores):
         self.cores = cores
 
-    def add_node(self, node):
-        self.nodes.add(node)
+    def add_key(self, key):
+        self.keys.add(key)
 
-        for child in node.children:
-            if child in self.nodes or child in self.pending_nodes:
+        if not self.graph.nodes[key].children:
+            return
+
+        for child in self.graph.nodes[key].children:
+            if child in self.keys or child in self.pending_keys:
                 continue
             self.push_consider_queue(child)
 
-    def push_consider_queue(self, node):
-        child_children_depth = mean([cc.depth for cc in node.children]) if node.children else 0
-        heappush(self.consider_queue, (child_children_depth, id(node), node))
+    def push_consider_queue(self, key):
+        child_children_depth = mean([self.graph.nodes[cc].depth for cc in self.graph.nodes[key].children]) if self.graph.nodes[key].children else 0
+        heappush(self.consider_queue, (child_children_depth, id(key), key))
 
     def pop_consider_queue(self):
         if not self.consider_queue:
             return None
         return heappop(self.consider_queue)[2]
 
-    def remove_node(self, node):
-        self.nodes.remove(node)
-
-    def remove_nodes(self, nodes):
-        self.nodes.difference_update(nodes)
-
     # the closured nodes cannot be inter-reached from the nodes outside the closure
-    def get_pending_nodes(self, new_node):
-        self.pending_nodes = set([new_node])
-        combined_nodes = self.nodes | self.pending_nodes
+    def get_pending_keys(self, new_key):
+        self.pending_keys = set([new_key])
+        combined_keys = self.keys | self.pending_keys
 
         visited = set()
 
-        def dfs(current_node):
-            if current_node in visited:
+        def dfs(current_key):
+            if current_key in visited:
                 return
-            visited.add(current_node)
+            visited.add(current_key)
 
             # skip if this node can not reach one of the end nodes
-            if not (current_node.reachable_to_nodes & combined_nodes):
+            if not (self.graph.nodes[current_key].can_reach_to & combined_keys):
                 return
 
-            self.pending_nodes.add(current_node)
-            combined_nodes.add(current_node)
+            self.pending_keys.add(current_key)
+            combined_keys.add(current_key)
 
-            for child_node in current_node.children:
-                dfs(child_node)
+            for child_key in self.graph.nodes[current_key].children:
+                dfs(child_key)
 
         # the new node can reach other nodes, while other nodes can reach the new node
-        for n in self.nodes | set([new_node]):
-            dfs(n)
+        for k in self.keys | set([new_key]):
+            dfs(k)
 
-        # don't need it anymore
-        combined_nodes = None
+        # don't need it for the following
+        combined_keys = None
 
-        self.pending_nodes -= self.nodes
+        self.pending_keys -= self.keys
 
         # the pending nodes should not depend on ouside nodes
         outside_parents = deque()
-        for pending_node in self.pending_nodes:
-            for parent in pending_node.parents:
-                if not parent.group:
+        for pending_key in self.pending_keys:
+            for parent in self.graph.nodes[pending_key].parents:
+                if not self.graph.nodes[parent].group:
                     outside_parents.append(parent)
         while outside_parents:
             parent = outside_parents.popleft()
-            if parent in self.pending_nodes:
+            if parent in self.pending_keys:
                 continue
-            for grandparent in parent.parents:
-                if not grandparent.group:
+            for grandparent in self.graph.nodes[parent].parents:
+                if not self.graph.nodes[grandparent].group:
                     outside_parents.append(grandparent)
-            self.pending_nodes.add(parent)
+            self.pending_keys.add(parent)
 
-    def merge_pending_nodes(self):
-        for node in self.pending_nodes:
-            self.add_node(node)
-            node.group = self
-        self.pending_nodes = set()
+    def merge_pending_keys(self):
+        for k in self.pending_keys:
+            self.add_key(k)
+            self.graph.nodes[k].group = self
+        self.pending_keys = set()
 
-    def revert_pending_nodes(self):
-        self.pending_nodes = set()
+    def revert_pending_keys(self):
+        self.pending_keys = set()
     
     def get_critical_time(self):
-        if not self.nodes:
+        if not self.keys:
             return 0
-        return round(max([node.end_time for node in self.nodes | self.pending_nodes]), 4)
+
+        return round(max([self.graph.nodes[k].critical_time for k in self.keys | self.pending_keys]))
     
     def get_resource_utilization(self):
-        if not self.nodes:
+        if not self.keys:
             return 0
         if not self.get_critical_time():
             return 0
-        return round(sum([node.execution_time for node in self.nodes | self.pending_nodes]) / (self.get_critical_time() * self.cores), 4)
+
+        return round(sum([self.graph.nodes[k].execution_time for k in self.keys | self.pending_keys]) / (self.get_critical_time() * self.cores), 4)
 
     def calculate_bottom_reach_time(self):
-        temp_group_nodes = self.nodes.copy() | self.pending_nodes.copy()
+        temp_keys = self.keys.copy() | self.pending_keys.copy()
         bottom_reach_time = {}
-        def dfs(node):
-            if node not in temp_group_nodes:
+        def dfs(k):
+            if k not in temp_keys:
                 return 0
-            if node in bottom_reach_time:
-                return bottom_reach_time[node]
-            
+            if k in bottom_reach_time:
+                return bottom_reach_time[k]
+
             max_time_to_leaf = max(
-                (dfs(child) + child.execution_time 
-                for child in node.children if child in temp_group_nodes),
+                (dfs(child) + self.graph.nodes[child].execution_time 
+                for child in self.graph.nodes[k].children if child in temp_keys),
                 default=0
             )
-            bottom_reach_time[node] = max_time_to_leaf
+            bottom_reach_time[k] = max_time_to_leaf
             return max_time_to_leaf
 
-        for node in temp_group_nodes:
-            dfs(node)
+        for k in temp_keys:
+            dfs(k)
 
         return bottom_reach_time
 
     def schedule_to_cores(self):
         # cannot find the optimal scheduling algorithm
-        if not self.nodes:
+        if not self.keys:
             return
 
-        ready_tasks = []
-        running_tasks = []
+        ready_keys = []
+        running_keys = []
         num_available_cores = self.cores
 
-        temp_group_nodes = self.nodes.copy() | self.pending_nodes.copy()
-        node_num_pending_parents = {node: len(node.pending_parents) for node in temp_group_nodes}
-        waiting_tasks = set([node for node in temp_group_nodes if node_num_pending_parents[node] > 0])
+        temp_keys = self.keys.copy() | self.pending_keys.copy()
+        num_pending_parents = {k: len(self.graph.nodes[k].pending_parents) for k in temp_keys}
+        waiting_keys = set([k for k in temp_keys if num_pending_parents[k] > 0])
         num_available_cores = self.cores
         bottom_reach_time = self.calculate_bottom_reach_time()
-        node_num_pending_parents = {node: len(node.pending_parents) for node in temp_group_nodes}
+        num_pending_parents = {k: len(self.graph.nodes[k].pending_parents) for k in temp_keys}
 
-        def enqueue_ready_tasks(node):
-            heappush(ready_tasks, (-bottom_reach_time[node], id(node), node))
+        def enqueue_ready_keys(k):
+            heappush(ready_keys, (-bottom_reach_time[k], id(k), k))
 
-        for node in temp_group_nodes:
-            if node_num_pending_parents[node] == 0:
-                enqueue_ready_tasks(node)
+        for k in temp_keys:
+            if num_pending_parents[k] == 0:
+                enqueue_ready_keys(k)
 
         current_time = 0
         critical_time = 0
 
-        while ready_tasks or running_tasks:
+        start_time = {}
+        end_time = {}
+
+        while ready_keys or running_keys:
             # submit as many tasks as possible
-            while ready_tasks and num_available_cores:
-                _, _, ready_task = heappop(ready_tasks)
-                ready_task.start_time = current_time
-                ready_task.end_time = current_time + ready_task.execution_time
-                heappush(running_tasks, (ready_task.end_time, id(ready_task), ready_task))
+            while ready_keys and num_available_cores:
+                ready_key = heappop(ready_keys)[2]
+                start_time[ready_key] = current_time
+                end_time[ready_key] = current_time + self.graph.nodes[ready_key].execution_time
+
+                heappush(running_keys, (end_time[ready_key], id(ready_key), ready_key))
                 num_available_cores -= 1
 
             # get the earliest finished task
-            _, _, finished_task = heappop(running_tasks)
-            current_time = finished_task.end_time
+            finished_key = heappop(running_keys)[2]
+            current_time = end_time[finished_key]
             num_available_cores += 1
-            critical_time = max(critical_time, finished_task.end_time)
+            critical_time = max(critical_time, end_time[finished_key])
 
-            for child in finished_task.children:
-                if child in waiting_tasks:
-                    node_num_pending_parents[child] -= 1
-                    if node_num_pending_parents[child] == 0:
-                        enqueue_ready_tasks(child)
-                        waiting_tasks.remove(child)
+            for child in self.graph.nodes[finished_key].children:
+                if child in waiting_keys:
+                    num_pending_parents[child] -= 1
+                    if num_pending_parents[child] == 0:
+                        enqueue_ready_keys(child)
+                        waiting_keys.remove(child)
 
-        assert len(ready_tasks) == len(running_tasks) == len(waiting_tasks) == 0
-        assert max([task.end_time for task in temp_group_nodes]) == critical_time
+        assert len(ready_keys) == len(running_keys) == len(waiting_keys) == 0
+        assert max([end_time[k] for k in temp_keys]) == critical_time
 
         return critical_time
 
-    def merge_from(self, starting_node):
-        if starting_node.group:
+    def merge_from(self, starting_key):
+        if self.graph.nodes[starting_key].group:
             return
 
-        self.push_consider_queue(starting_node)
-        new_group_nodes = set()
+        self.push_consider_queue(starting_key)
+        new_keys = set()
 
-        while (consider_node := self.pop_consider_queue()):
+        while (consider_key := self.pop_consider_queue()):
             # try to merge more nodes
-            self.get_pending_nodes(consider_node)
+            self.get_pending_keys(consider_key)
             self.schedule_to_cores()
 
             if self.get_critical_time() <= self.runtime_limit:
-                new_group_nodes.add(consider_node)
-                new_group_nodes.update(self.pending_nodes)
-                self.merge_pending_nodes()
+                new_keys.add(consider_key)
+                new_keys.update(self.pending_keys)
+                self.merge_pending_keys()
             else:
-                self.revert_pending_nodes()
+                self.revert_pending_keys()
 
         self.schedule_to_cores()
-        return new_group_nodes
+        return new_keys
 
     def visualize(self, save_to=None, show=False, label=None):
+        exit(1)
         self.schedule_to_cores()
 
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -500,7 +481,7 @@ class Node:
         self.critical_time = 0
 
         # the nodes that can be reached from this node
-        self.reachable_to_nodes = set()
+        self.can_reach_to = set()
         # the nodes that can reach this node
         self.reachable_from_nodes = set()
 
@@ -526,26 +507,17 @@ class Node:
     def remove_child(self, child):
         self.children.remove(child)
     
-    def add_reachable_to_nodes(self, nodes):
-        self.reachable_to_nodes.update(nodes)
+    def add_can_reach_to(self, keys):
+        self.can_reach_to.update(keys)
 
-    def remove_reachable_to_node(self, node):
-        self.reachable_to_nodes.remove(node)
-    
-    def remove_reachable_to_nodes(self, nodes):
-        self.reachable_to_nodes.difference_update(nodes)
+    def remove_reachable_to_node(self, key):
+        self.can_reach_to.remove(key)
 
-    def add_reachable_from_node(self, node):
-        self.reachable_from_nodes.add(node)
+    def can_be_reached_from(self, key):
+        self.reachable_from_nodes.add(key)
 
-    def add_reachable_from_nodes(self, nodes):
-        self.reachable_from_nodes.update(nodes)
-
-    def remove_reachable_from_node(self, node):
-        self.reachable_from_nodes.remove(node)
-    
-    def remove_reachable_from_nodes(self, nodes):
-        self.reachable_from_nodes.difference_update(nodes)
+    def remove_reachable_from_node(self, key):
+        self.reachable_from_nodes.remove(key)
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -565,3 +537,12 @@ class Node:
 
 
 
+class TGroup:
+    def __init__(self, cores=0, runtime_limit=0, id=None):
+        self.nodes = set()
+        
+        self.id = id
+        self.cores = cores
+        self.runtime_limit = runtime_limit
+        self.consider_queue = []
+        self.pending_keys = set()

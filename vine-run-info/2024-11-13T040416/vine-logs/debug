@@ -1,0 +1,35 @@
+2024/11/13 04:04:16.74 vine_manager[162758] tcp: listening on port 9129
+2024/11/13 04:04:16.74 vine_manager[162758] vine: manager start
+2024/11/13 04:04:16.74 vine_manager[162758] vine: Using default disconnect slow workers factor for 'default'.
+2024/11/13 04:04:16.74 vine_manager[162758] vine: workers connections -- known: 0, connecting: 0
+2024/11/13 04:04:16.74 vine_manager[162758] vine: log enabled and is being written to performance
+2024/11/13 04:04:16.74 vine_manager[162758] vine: transactions log enabled and is being written to transactions
+2024/11/13 04:04:16.74 vine_manager[162758] vine: graph log enabled and is being written to taskgraph
+2024/11/13 04:04:16.74 vine_manager[162758] vine: workers connections -- known: 0, connecting: 0
+2024/11/13 04:04:16.74 vine_manager[162758] vine: Manager is listening on port 39617.
+2024/11/13 04:04:17.12 vine_manager[162758] vine: workers connections -- known: 0, connecting: 0
+2024/11/13 04:04:17.12 vine_manager[162758] vine: Advertising manager status to the catalog server(s) at catalog.cse.nd.edu,backup-catalog.cse.nd.edu ...
+2024/11/13 04:04:17.12 vine_manager[162758] debug: compressed update message from 1618 to 672 bytes
+2024/11/13 04:04:17.12 vine_manager[162758] dns: looking up name catalog.cse.nd.edu
+2024/11/13 04:04:17.12 vine_manager[162758] dns: catalog.cse.nd.edu is 129.74.152.177
+2024/11/13 04:04:17.17 vine_manager[162758] debug: sending update via tcp to catalog.cse.nd.edu(129.74.152.177):9098 (background pid 162803)
+2024/11/13 04:04:17.19 vine_manager[162804] debug: sending update via tcp to catalog.cse.nd.edu(129.74.152.177):9098
+2024/11/13 04:04:17.19 vine_manager[162804] tcp: connecting to 129.74.152.177 port 9098
+2024/11/13 04:04:17.21 vine_manager[162758] dns: looking up name backup-catalog.cse.nd.edu
+2024/11/13 04:04:17.21 vine_manager[162758] dns: backup-catalog.cse.nd.edu is 129.74.247.43
+2024/11/13 04:04:17.22 vine_manager[162804] tcp: made connection to 129.74.152.177 port 9098
+2024/11/13 04:04:17.22 vine_manager[162804] tcp: disconnected from 129.74.152.177 port 9098
+2024/11/13 04:04:17.23 vine_manager[162758] debug: sending update via tcp to backup-catalog.cse.nd.edu(129.74.247.43):9098 (background pid 162805)
+2024/11/13 04:04:17.25 vine_manager[162806] debug: sending update via tcp to backup-catalog.cse.nd.edu(129.74.247.43):9098
+2024/11/13 04:04:17.25 vine_manager[162806] tcp: connecting to 129.74.247.43 port 9098
+2024/11/13 04:04:17.26 vine_manager[162806] tcp: made connection to 129.74.247.43 port 9098
+2024/11/13 04:04:17.26 vine_manager[162806] tcp: disconnected from 129.74.247.43 port 9098
+2024/11/13 04:04:17.27 vine_manager[162758] vine: deleting /root/graph_optimization/vine-run-info/2024-11-13T040416/staging
+2024/11/13 04:04:17.27 vine_manager[162758] vine:   object  created   ref_added  deleted
+2024/11/13 04:04:17.27 vine_manager[162758] vine: -----------------------------------
+2024/11/13 04:04:17.27 vine_manager[162758] vine:    tasks        1        0        1 ok
+2024/11/13 04:04:17.27 vine_manager[162758] vine:   mounts        2        0        2 ok
+2024/11/13 04:04:17.27 vine_manager[162758] vine:    files        2        2        4 ok
+2024/11/13 04:04:17.27 vine_manager[162758] vine: replicas        0        0        0 ok
+2024/11/13 04:04:17.27 vine_manager[162758] vine:  workers        0        0        0 ok
+2024/11/13 04:04:17.27 vine_manager[162758] vine: manager end
