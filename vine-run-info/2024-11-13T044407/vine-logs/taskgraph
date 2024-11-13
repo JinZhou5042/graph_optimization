@@ -1,5 +1,0 @@
-digraph "taskvine" {
-node [style=filled,font=Helvetica,fontsize=10];
-"file-file-meta-0e690dae3f8ea655956008e9dbb32686" [shape=rect,color=blue,label=""];
-"file-file-meta-ddbf291fdbe4746cece386082e340b29" [shape=rect,color=blue,label=""];
-}

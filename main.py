@@ -2,6 +2,29 @@ import random
 from collections import defaultdict
 from collections import deque
 import json
+import hashlib
+import sys
+from heapq import heappush, heappop
+import time
+from graphviz import Digraph
+import heapq
+import ndcctools.taskvine as vine
+from pprint import pprint
+from tqdm import tqdm
+import numpy as np
+from rich import print
+import queue
+import cloudpickle
+import libs
+from statistics import mean
+# from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
+import uuid
+import sys
+import types
+import random
+from collections import defaultdict
+from collections import deque
+import json
 from heapq import heappush, heappop
 import hashlib
 import matplotlib.pyplot as plt
@@ -12,6 +35,13 @@ import numpy as np
 from copy import deepcopy
 from statistics import mean
 import uuid
+
+
+NUM_WORKERS = 4
+NUM_CORES_PER_WORKER = 4
+
+
+####################################################################################################
 
 def generate_random_colors(num_colors):
     colors = []
@@ -202,12 +232,6 @@ class Group:
         self.consider_queue = []
         self.pending_keys = set()
 
-    def get_parents(self):
-        parents = set()
-        for k in self.keys:
-            parents.update(self.graph.nodes[k].parents)
-        return parents
-
     def children_of(self, key):
         return self.graph.children_of(key)
     
@@ -219,11 +243,11 @@ class Group:
 
     @property
     def children(self):
-        return set.union(*[self.children_of(k) for k in self.keys])
+        return set.union(*[self.children_of(k) for k in self.keys]) - self.keys
 
     @property
     def parents(self):
-        return set.union(*[self.parents_of(k) for k in self.keys])
+        return set.union(*[self.parents_of(k) for k in self.keys]) - self.keys
 
     def set_cores(self, cores):
         self.cores = cores
@@ -282,15 +306,15 @@ class Group:
         # the pending nodes should not depend on ouside nodes
         outside_parents = deque()
         for pending_key in self.pending_keys:
-            for parent in self.graph.nodes[pending_key].parents:
+            for parent in self.parents_of(pending_key):
                 if not self.graph.nodes[parent].group:
                     outside_parents.append(parent)
         while outside_parents:
             parent = outside_parents.popleft()
             if parent in self.pending_keys:
                 continue
-            for grandparent in self.graph.nodes[parent].parents:
-                if not self.graph.nodes[grandparent].group:
+            for grandparent in self.parents_of(parent):
+                if not self.node_of(grandparent).group:
                     outside_parents.append(grandparent)
             self.pending_keys.add(parent)
 
@@ -534,9 +558,164 @@ class Node:
 
 
 
+####################################################################################################
+
+# with open('simplified_hlg.json', 'r') as json_in:
+#     loaded_children_of = json.load(json_in)
+#     children_of = {key: set(value) for key, value in loaded_children_of.items()}
+
+# graph = Graph(children_of)
 
 
 
+with open("expanded_hlg.pkl", "rb") as f:
+    hlg = cloudpickle.load(f)
+
+    all_tasks = {}
+    for layer_name, layer in hlg.layers.items():
+        for key, sexpr in layer.items():
+            all_tasks[key] = sexpr
+
+    graph = Graph(all_tasks)
 
 
 
+with open("keys.pkl", "rb") as f:
+    keys = cloudpickle.load(f)
+    graph.compute_keys = graph.find_hlg_keys(keys)
+
+
+enqueued_groups = []
+
+
+def execute_group(group):
+
+    input_files = {}
+
+    for input_file in input_files.keys():
+        if not input_file:
+            continue
+        assert isinstance(input_file, vine.File)
+
+        try:
+            input_files[input_file] = input_file.contents(cloudpickle.load)['Result']
+        except Exception as e:
+            print(f"Error: {e}")
+            raise
+
+    def rec_call(sexpr):
+        if hash(sexpr) and sexpr in group.parents:
+            return input_files[sexpr]
+        if hash(sexpr) and sexpr in group.keys:
+            return group.node_of(sexpr).result_file
+
+        if isinstance(sexpr, list):
+            return [rec_call(item) for item in sexpr]
+        if isinstance(sexpr, tuple) and callable(sexpr[0]):
+            return sexpr[0](*[rec_call(item) for item in sexpr[1:]])
+        else:
+            return sexpr
+
+    num_pending_parents = {k: 0 for k in group.keys}
+    for k in group.keys:
+        for parent in group.graph.nodes[k].parents:
+            if parent in group.keys:
+                num_pending_parents[k] += 1
+
+    ready_tasks = [k for k in group.keys if num_pending_parents[k] == 0]
+    waiting_tasks = [k for k in group.keys if num_pending_parents[k] != 0]
+    running_tasks = []
+
+    while ready_tasks or running_tasks:
+        # run a task
+        k = ready_tasks.pop(0)
+        group.node_of(k).result_file = rec_call(group.node_of(k).sexpr)
+        # submit more tasks
+        for child in group.children_of(k):
+            if child in waiting_tasks:
+                num_pending_parents[child] -= 1
+                if num_pending_parents[child] == 0:
+                    ready_tasks.append(child)
+                    waiting_tasks.remove(child)
+
+    return group
+
+
+# g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
+
+def test():
+    return 100
+
+def execute_graph(graph):
+
+    ready_keys = []
+    for k, n in graph.nodes.items():
+        if not n.pending_parents:
+            ready_keys.append(k)
+
+    print(f"all nodes: {len(graph.nodes)}")
+
+    group_id = 0
+    groups = []
+
+    q = vine.Manager([9123, 9128], name="graph-optimization")
+    q.tune("watch-library-logfiles", 1)
+    hoisting_modules=[Graph, Node, Group, uuid, mean, hash_name]
+    libtask = q.create_library_from_functions('dask-library', execute_group, test, add_env=False, hoisting_modules=hoisting_modules)
+    q.install_library(libtask)
+
+    while ready_keys:
+        group_id += 1
+        group = Group(graph, cores=1, runtime_limit=5, id=group_id)
+        groups.append(group)
+
+        for ready_key in ready_keys:
+            if group.get_resource_utilization() > 0.99:
+                break
+
+            new_keys = group.merge_from(ready_key)
+
+            if new_keys:
+                for new_key in new_keys:
+                    if new_key in ready_keys:
+                        ready_keys.remove(new_key)
+                    for new_key_child in graph.nodes[new_key].children:
+                        graph.nodes[new_key_child].pending_parents.remove(new_key)
+                        if not graph.nodes[new_key_child].group and not graph.nodes[new_key_child].pending_parents:
+                            ready_keys.append(new_key_child)
+
+        print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
+        #group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
+        #graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
+        #enqueue_group(group)
+        # execute_group(group)
+
+        # print(group.nodes)
+        # group.nodes = None
+
+        # executed_group = execute_group(group)
+
+        # cloudpickle dump the group
+
+        t = vine.FunctionCall('dask-library', 'execute_group', group)
+        q.submit(t)
+
+        while not q.empty():
+            t = q.wait(5)
+            if t:
+                if t.successful():
+                    print(f"output = ", t.output)
+                else:
+                    print(f"{type(t.output)}")
+            else:
+                print(f"no result")
+
+        # exit(1)
+
+
+    assert sum([len(group.keys) for group in groups]) == len(graph.nodes)
+
+execute_graph(graph)
+
+
+# graph.visualize('merged_hlg')
