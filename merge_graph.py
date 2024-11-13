@@ -4,12 +4,14 @@ from collections import deque
 import json
 import hashlib
 from heapq import heappush, heappop
+import time
 from graphviz import Digraph
 import heapq
+import ndcctools.taskvine as vine
+from tqdm import tqdm
 import numpy as np
 from rich import print
 import queue
-import ndcctools.taskvine as vine
 import cloudpickle
 from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
 
@@ -42,7 +44,7 @@ with open("keys.pkl", "rb") as f:
 
 enqueued_groups = []
 
-def execute_group(group):
+def execute_group(graph, group):
     input_files = {group_parent.result_file: None for group_parent in group.get_parents()}
     
     for input_file in input_files.keys():
@@ -57,7 +59,7 @@ def execute_group(group):
             raise
 
     def rec_call(sexpr):
-        if group.graph.is_key(sexpr):
+        if graph.is_key(sexpr):
             if sexpr in input_files.keys():
                 return input_files[sexpr]
             for n in group.nodes:
@@ -84,7 +86,6 @@ def execute_group(group):
         # run a task
         task = ready_tasks.pop(0)
         task.result_file = rec_call(task.sexpr)
-        print(type(task.result_file))
         # submit more tasks
         for child in task.children:
             if child in waiting_tasks:
@@ -93,16 +94,8 @@ def execute_group(group):
                     ready_tasks.append(child)
                     waiting_tasks.remove(child)
 
-        #print(f"res = {task.result_file}")
+    return group
 
-def enqueue_group(group):
-    print(f"group size: {len(group.nodes)}")
-
-
-    group_parents = group.get_parents()
-
-    
-    t = vine.FunctionCall('dask-library', 'execute_group', group)
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
@@ -118,9 +111,15 @@ def execute_graph(graph):
     group_id = 0
     groups = []
 
+    q = vine.Manager([9123, 9128], name="graph-optimization")
+    libtask = q.create_library_from_functions('dask-library', execute_group, add_env=False)
+    q.install_library(libtask)
+
+    # pbar = tqdm(total=len(ready_nodes))
+
     while ready_nodes:
         group_id += 1
-        group = Group(graph, cores=1, runtime_limit=5000, id=group_id)
+        group = Group(cores=1, runtime_limit=5000, id=group_id)
         groups.append(group)
 
         for ready_node in ready_nodes:
@@ -142,9 +141,18 @@ def execute_graph(graph):
         #group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
         #graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
         #enqueue_group(group)
-        execute_group(group)
-        exit(1)
+        # execute_group(group)
 
+        # print(group.nodes)
+        group.nodes = None
+        group.pending_nodes = None
+        group.consider_queue = None
+        group.consider_queu = None
+
+        t = vine.FunctionCall('dask-library', 'execute_group', group)
+        q.submit(t)
+
+        exit(1)
 
     assert sum([len(group.nodes) for group in groups]) == len(graph.nodes)
 

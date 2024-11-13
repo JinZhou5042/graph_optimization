@@ -223,8 +223,7 @@ class Graph:
 
 
 class Group:
-    def __init__(self, graph, cores=0, runtime_limit=0, id=None):
-        self.graph = graph
+    def __init__(self, cores=0, runtime_limit=0, id=None):
         self.nodes = set()
         self.id = id
         self.cores = cores
@@ -363,7 +362,7 @@ class Group:
         # cannot find the optimal scheduling algorithm
         if not self.nodes:
             return
-        
+
         ready_tasks = []
         running_tasks = []
         num_available_cores = self.cores
@@ -547,3 +546,22 @@ class Node:
     
     def remove_reachable_from_nodes(self, nodes):
         self.reachable_from_nodes.difference_update(nodes)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('group', None)
+        return state
+
+
+
+
+
+
+
+
+
+
+
+
+
+
