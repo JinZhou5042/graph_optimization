@@ -15,7 +15,7 @@ import numpy as np
 from rich import print
 import queue
 import cloudpickle
-from libs import Graph, Node, SCHEDULING_OVERHEAD, Group, TGroup
+from libs import Graph, Node, SCHEDULING_OVERHEAD, Group
 
 import sys
 
@@ -51,18 +51,8 @@ enqueued_groups = []
 def execute_group(group):
     group_parents = group.get_parents()
 
-    def is_key(s, nodes):
-        try:
-            hash(s)
-            if s in [node.key for node in nodes]:
-                return True
-            else:
-                return False
-        except TypeError:
-            return False
-        
-    input_files = {group_parent.result_file: None for group_parent in group.get_parents()}
-    
+    input_files = {group.graph.nodes[group_parent].result_file: None for group_parent in group.get_parents()}
+
     for input_file in input_files.keys():
         if not input_file:
             continue
@@ -75,10 +65,9 @@ def execute_group(group):
             raise
 
     def rec_call(sexpr):
-        if is_key(sexpr, group_parents):
+        if group.graph.is_key(sexpr):
             if sexpr in input_files.keys():
                 return input_files[sexpr]
-        elif is_key(sexpr, group.nodes):
             for n in group.nodes:
                 if sexpr == n.key:
                     return n.result_file
@@ -90,22 +79,22 @@ def execute_group(group):
         else:
             return sexpr
 
-    num_pending_parents = {task: 0 for task in group.nodes}
-    for task in group.nodes:
-        for parent in task.parents:
-            if parent in group.nodes:
-                num_pending_parents[task] += 1
+    num_pending_parents = {k: 0 for k in group.keys}
+    for k in group.keys:
+        for parent in group.graph.nodes[k].parents:
+            if parent in group.keys:
+                num_pending_parents[k] += 1
 
-    ready_tasks = [task for task in group.nodes if num_pending_parents[task] == 0]
-    waiting_tasks = [task for task in group.nodes if num_pending_parents[task] != 0]
+    ready_tasks = [k for k in group.keys if num_pending_parents[k] == 0]
+    waiting_tasks = [k for k in group.keys if num_pending_parents[k] != 0]
     running_tasks = []
 
     while ready_tasks or running_tasks:
         # run a task
-        task = ready_tasks.pop(0)
-        task.result_file = rec_call(task.sexpr)
+        k = ready_tasks.pop(0)
+        k.result_file = rec_call(group.graph.nodes[k].sexpr)
         # submit more tasks
-        for child in task.children:
+        for child in group.graph.nodes[k].children:
             if child in waiting_tasks:
                 num_pending_parents[child] -= 1
                 if num_pending_parents[child] == 0:
@@ -116,6 +105,8 @@ def execute_group(group):
 
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
+
+
 
 def execute_graph(graph):
 
@@ -133,10 +124,9 @@ def execute_graph(graph):
     libtask = q.create_library_from_functions('dask-library', execute_group, add_env=False)
     q.install_library(libtask)
 
-
     while ready_keys:
         group_id += 1
-        group = Group(graph, cores=1, runtime_limit=5000, id=group_id)
+        group = Group(graph, cores=1, runtime_limit=200, id=group_id)
         groups.append(group)
 
         for ready_key in ready_keys:
@@ -163,6 +153,17 @@ def execute_graph(graph):
         # print(group.nodes)
         # group.nodes = None
 
+        execute_group(group)
+
+        print(f"yeah")
+
+        t = vine.FunctionCall('dask-library', 'execute_group', group)
+        q.submit(t)
+
+        while not q.empty():
+            t = q.wait(5)
+            if t:
+                print(t.result)
 
 
     assert sum([len(group.keys) for group in groups]) == len(graph.nodes)

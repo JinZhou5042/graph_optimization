@@ -146,21 +146,6 @@ class Graph:
 
         return deque(stack[::-1])
 
-    def merge_nodes(self, group_nodes):
-        part_topo_order = self.get_topo_order(nodes=group_nodes)
-        for i, part_node in enumerate(part_topo_order):
-            part_node.belongs_to_part = group_nodes
-            if i >= 1:
-                part_node.critical_time = part_topo_order[i - 1].critical_time + part_node.execution_time
-
-        if len(group_nodes) >= 3:
-            # update the downstream critical time
-            downstream_topo_order = self.get_topo_order(start_keys=group_nodes)
-            downstream_topo_order = deque(set(downstream_topo_order) - group_nodes)
-
-            for node in downstream_topo_order:
-                node.critical_time = max([parent.critical_time for parent in node.parents]) + node.execution_time
-
     def visualize(self, filename="graph", label='id', fill_white=False, draw_nodes=None):
         print(f"Saving graph to {filename}.svg")
 
@@ -210,8 +195,8 @@ class Group:
 
     def get_parents(self):
         parents = set()
-        for node in self.nodes:
-            parents.update(node.parents)
+        for k in self.keys:
+            parents.update(self.graph.nodes[k].parents)
         return parents
 
     def get_children(self):
@@ -302,7 +287,9 @@ class Group:
         if not self.keys:
             return 0
 
-        return round(max([self.graph.nodes[k].critical_time for k in self.keys | self.pending_keys]))
+        self.critical_time = self.schedule_to_cores()
+
+        return round(self.critical_time, 4)
     
     def get_resource_utilization(self):
         if not self.keys:
@@ -401,7 +388,7 @@ class Group:
         while (consider_key := self.pop_consider_queue()):
             # try to merge more nodes
             self.get_pending_keys(consider_key)
-            self.schedule_to_cores()
+            self.critical_time = self.schedule_to_cores()
 
             if self.get_critical_time() <= self.runtime_limit:
                 new_keys.add(consider_key)
@@ -410,12 +397,12 @@ class Group:
             else:
                 self.revert_pending_keys()
 
-        self.schedule_to_cores()
+        self.critical_time = self.schedule_to_cores()
         return new_keys
 
     def visualize(self, save_to=None, show=False, label=None):
         exit(1)
-        self.schedule_to_cores()
+        self.critical_time = self.schedule_to_cores()
 
         fig, ax = plt.subplots(figsize=(10, 6))
         group_nodes = sorted(self.nodes, key=lambda task: task.start_time)
@@ -533,16 +520,3 @@ class Node:
 
 
 
-
-
-
-
-class TGroup:
-    def __init__(self, cores=0, runtime_limit=0, id=None):
-        self.nodes = set()
-        
-        self.id = id
-        self.cores = cores
-        self.runtime_limit = runtime_limit
-        self.consider_queue = []
-        self.pending_keys = set()
