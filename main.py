@@ -6,6 +6,7 @@ import hashlib
 import sys
 from heapq import heappush, heappop
 import time
+import collections
 from graphviz import Digraph
 import numpy as np
 import numpy as np
@@ -14,6 +15,7 @@ import os
 import heapq
 import cloudpickle
 import math
+import threading
 import ndcctools.taskvine as vine
 from ndcctools.taskvine import FunctionCall
 from pprint import pprint
@@ -239,7 +241,7 @@ class Graph:
 
 
 class Group:
-    def __init__(self, graph, cores=0, runtime_limit=0, id=None):
+    def __init__(self, graph, cores=0, id=None):
         # self.nodes = set()
         self.graph = graph
 
@@ -247,7 +249,6 @@ class Group:
         
         self.id = id
         self.cores = cores
-        self.runtime_limit = runtime_limit
         self.consider_queue = []
         self.pending_keys = set()
 
@@ -331,21 +332,18 @@ class Group:
 
         self.pending_keys -= self.keys
 
-        # the pending nodes should not depend on ouside nodes
-        outside_parents = deque()
-        for pending_key in self.pending_keys:
-            for parent in self.parents_of(pending_key):
+        def dfs(node):
+            if node in self.pending_keys:
+                return
+            self.pending_keys.add(node)
+            for parent in self.parents_of(node):
                 if not self.node_of(parent).group:
-                    outside_parents.append(parent)
+                    dfs(parent)
 
-        while outside_parents:
-            parent = outside_parents.popleft()
-            if parent in self.pending_keys:
-                continue
-            for grandparent in self.parents_of(parent):
-                if not self.node_of(grandparent).group:
-                    outside_parents.append(grandparent)
-            self.pending_keys.add(parent)
+        for pk in self.pending_keys:
+            for ppk in self.parents_of(pk):
+                if not self.node_of(ppk).group:
+                    dfs(ppk)
 
     def merge_pending_keys(self):
         for k in self.pending_keys:
@@ -458,10 +456,7 @@ class Group:
 
         self.critical_time = critical_time
 
-    def merge_from(self, starting_key):
-        if self.node_of(starting_key).group:
-            print(f"are u kidding me bro")
-            return
+    def merge_from(self, starting_key, min_nodes=10):
 
         self.push_consider_queue(starting_key)
         new_keys = set()
@@ -469,11 +464,11 @@ class Group:
         while (consider_key := self.pop_consider_queue()):
             # try to merge more nodes
             self.get_closure(consider_key)
+            new_keys.update(self.pending_keys)
+            self.merge_pending_keys()
 
-            if self.get_critical_time() <= self.runtime_limit:
-                new_keys.update(self.pending_keys)
-                self.merge_pending_keys()
-            self.pending_keys = set()
+            if len(self.keys) >= min_nodes:
+                break
 
         return new_keys
 
@@ -535,6 +530,7 @@ class Node:
 
         self.hash_name = hash_name(key)
 
+        self.group = None
         self.output_vine_file = None
         self.output_filename = f"{uuid.uuid4()}.pkl"
 
@@ -551,8 +547,6 @@ class Node:
         self.can_reach_to = set()
         # the nodes that can reach this node
         self.reachable_from_nodes = set()
-
-        self.group = None
 
         self.start_time = 0
         self.end_time = 0
@@ -586,11 +580,6 @@ class Node:
 
     def remove_reachable_from_node(self, key):
         self.reachable_from_nodes.remove(key)
-
-    def __getstate__(self):
-        state = self.__dict__.copy()
-        state.pop('group', None)
-        return state
 
 
 class SimpleGroup:
@@ -630,17 +619,24 @@ class MyFunctionCall(FunctionCall):
 
 # graph = Graph(children_of)
 
+time_start = time.time()
 
+if os.path.exists("graph.pkl"):
+    with open("graph.pkl", "rb") as f:
+        graph = cloudpickle.load(f)
+else:
+    with open("expanded_hlg.pkl", "rb") as f:
+        hlg = cloudpickle.load(f)
 
-with open("expanded_hlg.pkl", "rb") as f:
-    hlg = cloudpickle.load(f)
+        all_tasks = {}
+        for layer_name, layer in hlg.layers.items():
+            for key, sexpr in layer.items():
+                all_tasks[key] = sexpr
 
-    all_tasks = {}
-    for layer_name, layer in hlg.layers.items():
-        for key, sexpr in layer.items():
-            all_tasks[key] = sexpr
+        graph = Graph(all_tasks)
 
-    graph = Graph(all_tasks)
+    with open("graph.pkl", "wb") as f:
+        cloudpickle.dump(graph, f)
 
 
 with open("keys.pkl", "rb") as f:
@@ -648,6 +644,7 @@ with open("keys.pkl", "rb") as f:
     graph.compute_keys = graph.find_hlg_keys(keys)
 
 
+print(f"graph loaded!")
 enqueued_groups = []
 
 
@@ -704,85 +701,28 @@ def execute_group(group):
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
-def get_group(graph, keys):
-    group = Group(graph, cores=1, runtime_limit=5000, id=0)
 
-    while keys:
-        key = keys.pop(0)
-        new_keys = group.merge_from(key)
-        for nk in new_keys:
-            if nk in keys:
-                keys.remove(nk)
-
-    print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
-
-    return group
-
-
-def consume_ready_keys(graph, ready_keys, q):
-
-    while ready_keys:
-
-        group = get_group(graph, ready_keys.copy())
-
-        if not group.get_critical_time() <= group.runtime_limit:
-            print(f"nonono bro")
-            print(f"critical time: {group.critical_time}, runtime limit: {group.runtime_limit}")
-            print(f"num keys: {len(group.keys)}")
-            exit(1)
-
-        for k in group.keys:
-            if k in ready_keys:
-                ready_keys.remove(k)
-
-        simple_group = SimpleGroup(graph, group)
-
-        t = MyFunctionCall('dask-library', 'execute_group', simple_group)
-        t.group = simple_group
-    
-        # t.enable_temp_output()
-
-        for k in simple_group.parents:
-            t.add_input(graph.get_output_vine_file_of(k), graph.get_output_filename_of(k))
-
-        for k, output_filename in simple_group.output_filenames.items():
-            # f = q.declare_file(os.path.join(staging_directory, "outputs", output_filename))
-            f = q.declare_temp()
-            t.add_output(f, output_filename)
-            graph.set_output_vine_file_of(k, f)
-
-        q.submit(t)
-
-
-def test():
-    return 100
-
-
-q = vine.Manager(9123, name="graph-optimization")
+q = vine.Manager(9123, name="graph-optimization2")
 q.tune("watch-library-logfiles", 1)
-hoisting_modules=[Graph, Node, Group, uuid, mean, hash_name]
-libtask = q.create_library_from_functions('dask-library', execute_group, test, add_env=False, hoisting_modules=hoisting_modules)
+hoisting_modules=[SimpleGroup]
+libtask = q.create_library_from_functions('dask-library', execute_group, add_env=False, hoisting_modules=hoisting_modules)
+libtask.set_env_var("PATH", "/scratch365/jzhou24/env/bin/:$PATH")
 q.install_library(libtask)
-staging_directory = q.staging_directory
-
 
 
 def execute_graph(graph):
 
-    ready_keys = []
-    for k, n in graph.nodes.items():
-        if not n.pending_parents:
-            ready_keys.append(k)
-
-    print(f"all nodes: {len(graph.nodes)}")
-    time_start = time.time()
-
-    consume_ready_keys(graph, ready_keys, q)
-
     pbar = tqdm(total=len(graph.nodes))
 
-    while not q.empty():
-        t = q.wait(1)
+    while True:
+        # submit tasks in ready_tasks
+        with ready_tasks_lock:
+            while ready_tasks:
+                t = ready_tasks.pop()
+
+                q.submit(t)
+
+        t = q.wait(5)
         if t:
             if t.successful():
                 keys = t.group.keys
@@ -800,26 +740,68 @@ def execute_graph(graph):
                         if not graph.node_of(pck).completed:
                             ck_ready = False
                     if ck_ready:
-                        ready_keys.append(ck)
-
-                consume_ready_keys(graph, ready_keys, q)
-
-                assert ready_keys == []
+                        with ready_keys_lock:
+                            ready_keys.append(ck)
             else:
                 print(f"failed")
+        else:
+            print(f"idle")
+            pass
 
     pbar.close()
 
+
+def enqueue_ready_keys(graph):
     for k, n in graph.nodes.items():
-        if not n.completed:
-            print(f"failed to complete {k}")
-            for pk in graph.parents_of(k):
-                print(f"parent {pk} completed: {graph.node_of(pk).completed}")
+        if not n.parents:
+            with ready_keys_lock:
+                ready_keys.append(k)
 
-    # assert sum([len(group.keys) for group in groups]) == len(graph.nodes)
+    while True:
+        if len(ready_keys) == 0:
+            time.sleep(1)
 
-    print(f"Execution time: {time.time() - time_start}")
+        rk = ready_keys.popleft()
+        group = Group(graph, cores=1, id=0)
+        group.merge_from(rk, min_nodes=10)
 
-execute_graph(graph)
+        for k in group.keys:
+            if k in ready_keys:
+                ready_keys.remove(k)
 
-# graph.visualize('merged_hlg')
+        t1 = time.time()
+        group = SimpleGroup(graph, group)
+        t2 = time.time()
+
+        t = MyFunctionCall('dask-library', 'execute_group', group)
+        t.group = group
+        t.enable_temp_output()
+
+        for k in t.group.parents:
+            t.add_input(graph.get_output_vine_file_of(k), graph.get_output_filename_of(k))
+
+        for k, output_filename in t.group.output_filenames.items():
+            f = q.declare_temp()
+            t.add_output(f, output_filename)
+            graph.set_output_vine_file_of(k, f)
+
+        t3 = time.time()
+
+        with ready_tasks_lock:
+            ready_tasks.append(t)
+
+
+ready_keys = collections.deque()
+ready_tasks = collections.deque()
+
+ready_keys_lock = threading.Lock()
+ready_tasks_lock = threading.Lock()
+
+thread1 = threading.Thread(target=execute_graph, args=(graph,))
+thread2 = threading.Thread(target=enqueue_ready_keys, args=(graph,))
+
+thread1.start()
+thread2.start()
+
+thread1.join()
+thread2.join()
