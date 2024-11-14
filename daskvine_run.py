@@ -22,13 +22,13 @@ def compute(hlg, keys):
     print('start compute')
 
     m = DaskVine(
-        [9123, 9128],
+        9123,
         name=f"{os.environ['USER']}-hgg2",
     )
 
-    m.tune("transfer-temps-recovery", 1)
+    # m.tune("transfer-temps-recovery", 1)
 
-    computed = m.get(hlg, keys, resources={"cores": 1}, env_vars={'PATH': '/scratch365/jzhou24/env/bin/:$PATH'})
+    computed = m.get(hlg, keys, resources={"cores": 1}, worker_transfers=False, lazy_transfers=False, env_vars={'PATH': '/scratch365/jzhou24/env/bin/:$PATH'})
 
     full_stop = time.time()
     print('full run time is ' + str((full_stop - full_start) / 60))

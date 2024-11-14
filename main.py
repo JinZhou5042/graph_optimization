@@ -7,8 +7,15 @@ import sys
 from heapq import heappush, heappop
 import time
 from graphviz import Digraph
+import numpy as np
+import numpy as np
+from copy import deepcopy
+import os
 import heapq
+import cloudpickle
+import math
 import ndcctools.taskvine as vine
+from ndcctools.taskvine import FunctionCall
 from pprint import pprint
 from tqdm import tqdm
 import numpy as np
@@ -107,14 +114,26 @@ class Graph:
             for kk in self.nodes[k].can_reach_to:
                 self.nodes[kk].can_be_reached_from(k)
 
-    def children_of(self, key):
-        return self.nodes[key].children
+    def get_output_vine_file_of(self, k):
+        return self.nodes[k].output_vine_file
 
-    def parents_of(self, key):
-        return self.nodes[key].parents
+    def set_output_vine_file_of(self, k, output_vine_file):
+        self.nodes[k].output_vine_file = output_vine_file
 
-    def node_of(self, key):
-        return self.nodes[key]
+    def get_output_filename_of(self, k):
+        return self.nodes[k].output_filename
+
+    def set_output_filename_of(self, k, output_filename):
+        self.nodes[k].output_filename = output_filename
+
+    def children_of(self, k):
+        return self.nodes[k].children
+
+    def parents_of(self, k):
+        return self.nodes[k].parents
+
+    def node_of(self, k):
+        return self.nodes[k]
 
     def is_key(self, s):
         try:
@@ -185,38 +204,38 @@ class Graph:
 
         return deque(stack[::-1])
 
-    def visualize(self, filename="graph", label='id', fill_white=False, draw_nodes=None):
-        print(f"Saving graph to {filename}.svg")
+    def visualize(self, filename="graph", label='id', fill_white=False, draw_keys=None, format='svg'):
+        print(f"Saving graph to {filename}.{format}")
 
         dot = Digraph()
 
-        draw_nodes = self.nodes.values() if not draw_nodes else draw_nodes
+        draw_keys = self.nodes.keys() if not draw_keys else draw_keys
 
-        for node in draw_nodes:
+        for key in draw_keys:
             if fill_white:
                 color = 'white'
             else:
-                hash_object = hashlib.sha256(str(node.group).encode())
+                hash_object = hashlib.sha256(str(self.node_of(key).group).encode())
                 hash_int = int(hash_object.hexdigest(), 16)
                 color_index = hash_int % len(colors)
                 color = colors[color_index]
-            if label == 'id':
-                dot.node(node.hash_name, str(node.id), style="filled", fillcolor=color)
-            elif label == 'key':
-                dot.node(node.hash_name, node.key, style="filled", fillcolor=color)
-            elif label == 'hash_name':
-                dot.node(node.hash_name, node.hash_name, style="filled", fillcolor=color)
-            elif label == 'critical_time':
-                dot.node(node.hash_name, node.critical_time, style="filled", fillcolor=color)
-            elif label == 'execution_time':
-                dot.node(node.hash_name, str(node.execution_time), style="filled", fillcolor=color)
-            else:
-                raise ValueError(f"Unknown label: {label}")
-        for node in draw_nodes:
-            for parent_node in node.parents:
-                dot.edge(parent_node.hash_name, node.hash_name)
+#            if label == 'id':
+#                dot.node(node.hash_name, str(node.id), style="filled", fillcolor=color)
+#            elif label == 'key':
+#                dot.node(node.hash_name, node.key, style="filled", fillcolor=color)
+#            elif label == 'hash_name':
+#                dot.node(node.hash_name, node.hash_name, style="filled", fillcolor=color)
+#            elif label == 'critical_time':
+#                dot.node(node.hash_name, node.critical_time, style="filled", fillcolor=color)
+#            elif label == 'execution_time':
+#                dot.node(node.hash_name, str(node.execution_time), style="filled", fillcolor=color)
+#            else:
+#                raise ValueError(f"Unknown label: {label}")
+        for k in draw_keys:
+            for pk in self.node_of(k).parents:
+                dot.edge(pk, k)
 
-        dot.render(filename, format='svg', cleanup=True)        
+        dot.render(filename, format=format, cleanup=True)        
 
 
 class Group:
@@ -353,8 +372,8 @@ class Group:
                 return bottom_reach_time[k]
 
             max_time_to_leaf = max(
-                (dfs(child) + self.graph.nodes[child].execution_time 
-                for child in self.graph.nodes[k].children if child in temp_keys),
+                (dfs(child) + self.node_of(child).execution_time 
+                for child in self.node_of(k).children if child in temp_keys),
                 default=0
             )
             bottom_reach_time[k] = max_time_to_leaf
@@ -375,11 +394,16 @@ class Group:
         num_available_cores = self.cores
 
         temp_keys = self.keys.copy() | self.pending_keys.copy()
-        num_pending_parents = {k: len(self.graph.nodes[k].pending_parents) for k in temp_keys}
+        
+        num_pending_parents = {k: 0 for k in temp_keys}
+        for k in temp_keys:
+            for pk in self.parents_of(k):
+                if pk in temp_keys:
+                    num_pending_parents[k] += 1
+
         waiting_keys = set([k for k in temp_keys if num_pending_parents[k] > 0])
         num_available_cores = self.cores
         bottom_reach_time = self.calculate_bottom_reach_time()
-        num_pending_parents = {k: len(self.graph.nodes[k].pending_parents) for k in temp_keys}
 
         def enqueue_ready_keys(k):
             heappush(ready_keys, (-bottom_reach_time[k], id(k), k))
@@ -399,7 +423,7 @@ class Group:
             while ready_keys and num_available_cores:
                 ready_key = heappop(ready_keys)[2]
                 start_time[ready_key] = current_time
-                end_time[ready_key] = current_time + self.graph.nodes[ready_key].execution_time
+                end_time[ready_key] = current_time + self.node_of(ready_key).execution_time
 
                 heappush(running_keys, (end_time[ready_key], id(ready_key), ready_key))
                 num_available_cores -= 1
@@ -410,7 +434,7 @@ class Group:
             num_available_cores += 1
             critical_time = max(critical_time, end_time[finished_key])
 
-            for child in self.graph.nodes[finished_key].children:
+            for child in self.children_of(finished_key):
                 if child in waiting_keys:
                     num_pending_parents[child] -= 1
                     if num_pending_parents[child] == 0:
@@ -423,7 +447,7 @@ class Group:
         return critical_time
 
     def merge_from(self, starting_key):
-        if self.graph.nodes[starting_key].group:
+        if self.node_of(starting_key).group:
             return
 
         self.push_consider_queue(starting_key)
@@ -432,6 +456,7 @@ class Group:
         while (consider_key := self.pop_consider_queue()):
             # try to merge more nodes
             self.get_pending_keys(consider_key)
+
             self.critical_time = self.schedule_to_cores()
 
             if self.get_critical_time() <= self.runtime_limit:
@@ -502,6 +527,9 @@ class Node:
 
         self.hash_name = hash_name(key)
 
+        self.output_vine_file = None
+        self.output_filename = f"{uuid.uuid4()}.pkl"
+
         self.children = set()
         self.parents = set()
 
@@ -523,7 +551,8 @@ class Node:
 
         self.depth = 0
 
-        self.result_file = None
+        self.completed = False
+
 
     def add_parent(self, parent):
         self.parents.add(parent)
@@ -556,6 +585,33 @@ class Node:
         return state
 
 
+class SimpleGroup:
+    def __init__(self, graph, group):
+        self.keys = group.keys
+        self.sexpr_of = {k: graph.node_of(k).sexpr for k in group.keys}
+        self.parents = group.parents
+        self.children = group.children
+        self.children_of = {k: group.children_of(k) for k in group.keys}
+        self.parents_of = {k: group.parents_of(k) for k in group.keys}
+        self.pending_parents = self.parents_of.copy()
+        self.num_pending_parents = {k: sum(1 for p in self.parents_of[k] if p in self.keys) for k in self.keys}
+        self.ready_keys = [k for k in self.keys if self.num_pending_parents[k] == 0]
+        self.waiting_keys = [k for k in self.keys if self.num_pending_parents[k] > 0]
+
+        self.output_of = {k: None for k in group.keys}
+        # these are parent keys outside of this group, these outputs are used as inputs and should be loaded from pkl
+        for k in self.parents:
+            self.output_of[k] = graph.get_output_filename_of(k)
+
+        # output of these keys are going to be dumped to files
+        self.outkeys = {k for k in self.keys if any(child not in self.keys for child in self.children_of[k])}
+        self.output_filenames = {k: graph.get_output_filename_of(k) for k in self.outkeys}
+
+
+class MyFunctionCall(FunctionCall):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.group = None
 
 
 ####################################################################################################
@@ -579,7 +635,6 @@ with open("expanded_hlg.pkl", "rb") as f:
     graph = Graph(all_tasks)
 
 
-
 with open("keys.pkl", "rb") as f:
     keys = cloudpickle.load(f)
     graph.compute_keys = graph.find_hlg_keys(keys)
@@ -590,24 +645,25 @@ enqueued_groups = []
 
 def execute_group(group):
 
-    input_files = {}
+    # output: the direct output
+    # output_filename: the filename to dump the output
+    # output_vine_file: the vine file to load the output
 
-    for input_file in input_files.keys():
-        if not input_file:
+    for k, output in group.output_of.items():
+        if not output:
             continue
-        assert isinstance(input_file, vine.File)
 
         try:
-            input_files[input_file] = input_file.contents(cloudpickle.load)['Result']
+            with open(output, 'rb') as f:
+                group.output_of[k] = cloudpickle.load(f)
+
         except Exception as e:
             print(f"Error: {e}")
             raise
 
     def rec_call(sexpr):
-        if hash(sexpr) and sexpr in group.parents:
-            return input_files[sexpr]
-        if hash(sexpr) and sexpr in group.keys:
-            return group.result_of[sexpr]
+        if hash(sexpr) and sexpr in group.keys | group.parents:
+            return group.output_of[sexpr]
 
         if isinstance(sexpr, list):
             return [rec_call(item) for item in sexpr]
@@ -619,7 +675,10 @@ def execute_group(group):
     while group.ready_keys:
         # run a task
         k = group.ready_keys.pop(0)
-        group.result_of[k] = rec_call(group.sexpr_of[k])
+        group.output_of[k] = rec_call(group.sexpr_of[k])
+        if k in group.outkeys:
+            with open(group.output_filenames[k], 'wb') as f:
+                cloudpickle.dump(group.output_of[k], f)
         # submit more tasks
         for child in group.children_of[k]:
             if child in group.waiting_keys:
@@ -628,13 +687,77 @@ def execute_group(group):
                     group.ready_keys.append(child)
                     group.waiting_keys.remove(child)
 
-    return group
+    return group.keys
 
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
+def consume_ready_keys(graph, ready_keys, q):
+
+    mergeable_keys = ready_keys.copy()
+
+    while mergeable_keys:
+
+        group = Group(graph, cores=1, runtime_limit=500, id=0)
+
+        for mergeable_key in mergeable_keys:
+            if graph.node_of(mergeable_key).group:
+                mergeable_keys.remove(mergeable_key)
+                continue
+            new_keys = group.merge_from(mergeable_key)
+
+            print(f"merging from {mergeable_key}, new keys: {new_keys}")
+
+            for k in new_keys:
+                if k in mergeable_keys:
+                    mergeable_keys.remove(k)
+
+                for ck in graph.children_of(k):
+                    ck_ready = True
+                    for pck in graph.parents_of(ck):
+                        # skip if the parent is grouped
+                        if graph.node_of(pck).group:
+                            continue
+                        ck_ready = False
+                    if ck_ready:
+                        mergeable_keys.append(ck)
+
+        if not group.keys:
+            continue
+
+        simple_group = SimpleGroup(graph, group)
+
+        t = MyFunctionCall('dask-library', 'execute_group', simple_group)
+        t.group = simple_group
+    
+        t.enable_temp_output()
+
+        for k in simple_group.parents:
+            t.add_input(graph.get_output_vine_file_of(k), graph.get_output_filename_of(k))
+
+        for k, output_filename in simple_group.output_filenames.items():
+            # f = q.declare_file(os.path.join(staging_directory, "outputs", output_filename))
+            f = q.declare_temp()
+            t.add_output(f, output_filename)
+            graph.set_output_vine_file_of(k, f)
+
+        q.submit(t)
+
+        print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
+
+
 def test():
     return 100
+
+
+q = vine.Manager(9123, name="graph-optimization")
+q.tune("watch-library-logfiles", 1)
+hoisting_modules=[Graph, Node, Group, uuid, mean, hash_name]
+libtask = q.create_library_from_functions('dask-library', execute_group, test, add_env=False, hoisting_modules=hoisting_modules)
+q.install_library(libtask)
+staging_directory = q.staging_directory
+
+
 
 def execute_graph(graph):
 
@@ -644,77 +767,36 @@ def execute_graph(graph):
             ready_keys.append(k)
 
     print(f"all nodes: {len(graph.nodes)}")
+    time_start = time.time()
 
-    group_id = 0
-    groups = []
+    consume_ready_keys(graph, ready_keys, q)
 
-    q = vine.Manager([9123, 9128], name="graph-optimization")
-    q.tune("watch-library-logfiles", 1)
-    hoisting_modules=[Graph, Node, Group, uuid, mean, hash_name]
-    libtask = q.create_library_from_functions('dask-library', execute_group, test, add_env=False, hoisting_modules=hoisting_modules)
-    q.install_library(libtask)
+    pbar = tqdm(total=len(graph.nodes))
+    while not q.empty():
+        t = q.wait(1)
+        if t:
+            if t.successful():
+                keys = t.group.keys
+                pbar.update(len(keys))
+                # enqueue the children of the group
+                for ck in t.group.children:
+                    if graph.node_of(ck).completed:
+                        ready_keys.remove(ck)
+                    else:
+                        ready_keys.append(ck)
 
-    while ready_keys:
-        group_id += 1
-        group = Group(graph, cores=1, runtime_limit=5, id=group_id)
-        groups.append(group)
-
-        for ready_key in ready_keys:
-            if group.get_resource_utilization() > 0.99:
-                break
-
-            new_keys = group.merge_from(ready_key)
-
-            if new_keys:
-                for new_key in new_keys:
-                    if new_key in ready_keys:
-                        ready_keys.remove(new_key)
-                    for new_key_child in graph.nodes[new_key].children:
-                        graph.nodes[new_key_child].pending_parents.remove(new_key)
-                        if not graph.nodes[new_key_child].group and not graph.nodes[new_key_child].pending_parents:
-                            ready_keys.append(new_key_child)
-
-        print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
-        #group.visualize(save_to=f"/Users/jinzhou/Downloads/group_execution_{group.id}")
-        #graph.visualize(f"/Users/jinzhou/Downloads/group_merged_{group.id}", label='id', draw_nodes=group.nodes)
-
-        # executed_group = execute_group(group)
-
-        class SimpleGroup:
-            def __init__(self, graph, group):
-                self.keys = group.keys
-                self.sexpr_of = {k: graph.node_of(k).sexpr for k in group.keys}
-                self.parents = group.parents
-                self.children = group.children
-                self.children_of = {k: group.children_of(k) for k in group.keys}
-                self.parents_of = {k: group.parents_of(k) for k in group.keys}
-                self.pending_parents = self.parents_of.copy()
-                self.result_of = {k: None for k in group.keys}
-                self.num_pending_parents = {k: sum(1 for p in self.parents_of[k] if p in self.keys) for k in self.keys}
-                self.ready_keys = [k for k in self.keys if self.num_pending_parents[k] == 0]
-                self.waiting_keys = [k for k in self.keys if self.num_pending_parents[k] > 0]
-
-        simple_group = SimpleGroup(graph, group)
-
-        t = vine.FunctionCall('dask-library', 'execute_group', simple_group)
-        q.submit(t)
-
-        while not q.empty():
-            t = q.wait(5)
-            if t:
-                if t.successful():
-                    print(f"output = ", t.output)
-                else:
-                    print(f"{type(t.output)}")
+                consume_ready_keys(graph, ready_keys, q)
             else:
-                print(f"no result")
+                print(f"failed")
+        else:
+            print("waiting for results")
 
-        # exit(1)
+    pbar.close()
 
+    # assert sum([len(group.keys) for group in groups]) == len(graph.nodes)
 
-    assert sum([len(group.keys) for group in groups]) == len(graph.nodes)
+    print(f"Execution time: {time.time() - time_start}")
 
 execute_graph(graph)
-
 
 # graph.visualize('merged_hlg')

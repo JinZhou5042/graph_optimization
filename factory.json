@@ -1,0 +1,11 @@
+{
+    "manager-name": "graph-optimization",
+    "max-workers": 64,
+    "min-workers": 8,
+    "workers-per-cycle": 8,
+    "condor-requirements":"((has_vast))",
+    "cores": 20,
+    "memory": 4*1024,
+    "disk": 50*1024,
+    "timeout": 36000
+}
