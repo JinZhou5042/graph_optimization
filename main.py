@@ -251,6 +251,8 @@ class Group:
         self.consider_queue = []
         self.pending_keys = set()
 
+        self.critical_time = 0
+
     def children_of(self, key):
         return self.graph.children_of(key)
     
@@ -262,11 +264,21 @@ class Group:
 
     @property
     def children(self):
-        return set.union(*[self.children_of(k) for k in self.keys]) - self.keys
+        children = set()
+        for k in self.keys:
+            for ck in self.children_of(k):
+                if ck not in self.keys:
+                    children.add(ck)
+        return children
 
     @property
     def parents(self):
-        return set.union(*[self.parents_of(k) for k in self.keys]) - self.keys
+        parents = set()
+        for k in self.keys:
+            for pk in self.parents_of(k):
+                if pk not in self.keys:
+                    parents.add(pk)
+        return parents
 
     def set_cores(self, cores):
         self.cores = cores
@@ -292,9 +304,9 @@ class Group:
         return heappop(self.consider_queue)[2]
 
     # the closured nodes cannot be inter-reached from the nodes outside the closure
-    def get_pending_keys(self, new_key):
+    def get_closure(self, new_key):
         self.pending_keys = set([new_key])
-        combined_keys = self.keys | self.pending_keys
+        temp_keys = self.keys | self.pending_keys
 
         visited = set()
 
@@ -304,11 +316,11 @@ class Group:
             visited.add(current_key)
 
             # skip if this node can not reach one of the end nodes
-            if not (self.graph.nodes[current_key].can_reach_to & combined_keys):
+            if not (self.graph.nodes[current_key].can_reach_to & temp_keys):
                 return
 
             self.pending_keys.add(current_key)
-            combined_keys.add(current_key)
+            temp_keys.add(current_key)
 
             for child_key in self.graph.nodes[current_key].children:
                 dfs(child_key)
@@ -317,17 +329,15 @@ class Group:
         for k in self.keys | set([new_key]):
             dfs(k)
 
-        # don't need it for the following
-        combined_keys = None
-
         self.pending_keys -= self.keys
 
         # the pending nodes should not depend on ouside nodes
         outside_parents = deque()
         for pending_key in self.pending_keys:
             for parent in self.parents_of(pending_key):
-                if not self.graph.nodes[parent].group:
+                if not self.node_of(parent).group:
                     outside_parents.append(parent)
+
         while outside_parents:
             parent = outside_parents.popleft()
             if parent in self.pending_keys:
@@ -347,17 +357,16 @@ class Group:
         self.pending_keys = set()
     
     def get_critical_time(self):
-        if not self.keys:
+        if not self.keys and not self.pending_keys:
             return 0
 
-        self.critical_time = self.schedule_to_cores()
+        return sum(self.node_of(k).execution_time for k in self.keys | self.pending_keys)
 
-        return round(self.critical_time, 4)
+        self.schedule_to_cores()
+        return round(self.critical_time)
     
     def get_resource_utilization(self):
         if not self.keys:
-            return 0
-        if not self.get_critical_time():
             return 0
 
         return round(sum([self.graph.nodes[k].execution_time for k in self.keys | self.pending_keys]) / (self.get_critical_time() * self.cores), 4)
@@ -385,6 +394,9 @@ class Group:
         return bottom_reach_time
 
     def schedule_to_cores(self):
+
+        self.critical_time = sum(self.node_of(k).execution_time for k in self.keys | self.pending_keys)
+        return
         # cannot find the optimal scheduling algorithm
         if not self.keys:
             return
@@ -444,10 +456,11 @@ class Group:
         assert len(ready_keys) == len(running_keys) == len(waiting_keys) == 0
         assert max([end_time[k] for k in temp_keys]) == critical_time
 
-        return critical_time
+        self.critical_time = critical_time
 
     def merge_from(self, starting_key):
         if self.node_of(starting_key).group:
+            print(f"are u kidding me bro")
             return
 
         self.push_consider_queue(starting_key)
@@ -455,23 +468,18 @@ class Group:
 
         while (consider_key := self.pop_consider_queue()):
             # try to merge more nodes
-            self.get_pending_keys(consider_key)
-
-            self.critical_time = self.schedule_to_cores()
+            self.get_closure(consider_key)
 
             if self.get_critical_time() <= self.runtime_limit:
-                new_keys.add(consider_key)
                 new_keys.update(self.pending_keys)
                 self.merge_pending_keys()
-            else:
-                self.revert_pending_keys()
+            self.pending_keys = set()
 
-        self.critical_time = self.schedule_to_cores()
         return new_keys
 
     def visualize(self, save_to=None, show=False, label=None):
         exit(1)
-        self.critical_time = self.schedule_to_cores()
+        self.schedule_to_cores()
 
         fig, ax = plt.subplots(figsize=(10, 6))
         group_nodes = sorted(self.nodes, key=lambda task: task.start_time)
@@ -662,8 +670,12 @@ def execute_group(group):
             raise
 
     def rec_call(sexpr):
-        if hash(sexpr) and sexpr in group.keys | group.parents:
-            return group.output_of[sexpr]
+        try:
+            hash(sexpr)
+            if sexpr in group.keys | group.parents:
+                return group.output_of[sexpr]
+        except TypeError:
+            pass
 
         if isinstance(sexpr, list):
             return [rec_call(item) for item in sexpr]
@@ -692,45 +704,43 @@ def execute_group(group):
 
 # g.visualize('/Users/jinzhou/Downloads/original_hlg', fill_white=True)
 
+def get_group(graph, keys):
+    group = Group(graph, cores=1, runtime_limit=5000, id=0)
+
+    while keys:
+        key = keys.pop(0)
+        new_keys = group.merge_from(key)
+        for nk in new_keys:
+            if nk in keys:
+                keys.remove(nk)
+
+    print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
+
+    return group
+
+
 def consume_ready_keys(graph, ready_keys, q):
 
-    mergeable_keys = ready_keys.copy()
+    while ready_keys:
 
-    while mergeable_keys:
+        group = get_group(graph, ready_keys.copy())
 
-        group = Group(graph, cores=1, runtime_limit=500, id=0)
+        if not group.get_critical_time() <= group.runtime_limit:
+            print(f"nonono bro")
+            print(f"critical time: {group.critical_time}, runtime limit: {group.runtime_limit}")
+            print(f"num keys: {len(group.keys)}")
+            exit(1)
 
-        for mergeable_key in mergeable_keys:
-            if graph.node_of(mergeable_key).group:
-                mergeable_keys.remove(mergeable_key)
-                continue
-            new_keys = group.merge_from(mergeable_key)
-
-            print(f"merging from {mergeable_key}, new keys: {new_keys}")
-
-            for k in new_keys:
-                if k in mergeable_keys:
-                    mergeable_keys.remove(k)
-
-                for ck in graph.children_of(k):
-                    ck_ready = True
-                    for pck in graph.parents_of(ck):
-                        # skip if the parent is grouped
-                        if graph.node_of(pck).group:
-                            continue
-                        ck_ready = False
-                    if ck_ready:
-                        mergeable_keys.append(ck)
-
-        if not group.keys:
-            continue
+        for k in group.keys:
+            if k in ready_keys:
+                ready_keys.remove(k)
 
         simple_group = SimpleGroup(graph, group)
 
         t = MyFunctionCall('dask-library', 'execute_group', simple_group)
         t.group = simple_group
     
-        t.enable_temp_output()
+        # t.enable_temp_output()
 
         for k in simple_group.parents:
             t.add_input(graph.get_output_vine_file_of(k), graph.get_output_filename_of(k))
@@ -742,8 +752,6 @@ def consume_ready_keys(graph, ready_keys, q):
             graph.set_output_vine_file_of(k, f)
 
         q.submit(t)
-
-        print(len(group.keys), group.get_critical_time(), group.get_resource_utilization())
 
 
 def test():
@@ -772,26 +780,41 @@ def execute_graph(graph):
     consume_ready_keys(graph, ready_keys, q)
 
     pbar = tqdm(total=len(graph.nodes))
+
     while not q.empty():
         t = q.wait(1)
         if t:
             if t.successful():
                 keys = t.group.keys
                 pbar.update(len(keys))
+
+                for k in keys:
+                    graph.node_of(k).completed = True
+
                 # enqueue the children of the group
                 for ck in t.group.children:
-                    if graph.node_of(ck).completed:
-                        ready_keys.remove(ck)
-                    else:
+                    if graph.node_of(ck).group:
+                        continue
+                    ck_ready = True
+                    for pck in graph.parents_of(ck):
+                        if not graph.node_of(pck).completed:
+                            ck_ready = False
+                    if ck_ready:
                         ready_keys.append(ck)
 
                 consume_ready_keys(graph, ready_keys, q)
+
+                assert ready_keys == []
             else:
                 print(f"failed")
-        else:
-            print("waiting for results")
 
     pbar.close()
+
+    for k, n in graph.nodes.items():
+        if not n.completed:
+            print(f"failed to complete {k}")
+            for pk in graph.parents_of(k):
+                print(f"parent {pk} completed: {graph.node_of(pk).completed}")
 
     # assert sum([len(group.keys) for group in groups]) == len(graph.nodes)
 
