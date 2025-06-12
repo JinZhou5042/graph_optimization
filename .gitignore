@@ -1,0 +1,11 @@
+__pycache__/
+*.pkl
+*.svg
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.webp
