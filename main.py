@@ -78,6 +78,7 @@ class TaskGraphExecutor():
         self.task_graph = task_graph
         self.num_pending_parents_of_key = {k: v.in_degree() for k, v in self.task_graph.key_to_vertex.items()}
         self.ready_keys = deque([k for k, count in self.num_pending_parents_of_key.items() if count == 0])
+        print(f"Ready keys: {len(self.ready_keys)}")
 
     def create_group(self, key):
         group_keys = {key}
@@ -97,28 +98,43 @@ class TaskGraphExecutor():
         return group
 
     def execute(self):
+        key_of_task = {}
         with create_progress_bar() as pbar:
-            pbar.add_task("Executing task graph", total=len(self.task_graph.sexpr_of))
+            pbar_task_id = pbar.add_task("Executing task graph", total=len(self.task_graph.sexpr_of))
             while True:
-                # pop a runnable key
-                rk = self.ready_keys.popleft()
+                while self.ready_keys and self.manager.hungry():
+                    # submit all ready keys
+                    rk = self.ready_keys.popleft()
 
-                # create a function call task
-                group = self.create_group(rk)
-                t = FunctionCall('dask-library', 'execute_group', group)
-                t.enable_temp_output()
+                    # create a function call task
+                    group = self.create_group(rk)
+                    t = FunctionCall('dask-library', 'execute_group', group)
+                    t.enable_temp_output()
+                    key_of_task[t] = rk
 
-                # add input files
-                for k in self.task_graph.get_input_keys_of_group(group.keys):
-                    t.add_input(self.task_graph.get_output_vine_file_of(k), self.task_graph.get_output_filename_of(k))
+                    # add input files
+                    for k in self.task_graph.get_input_keys_of_group(group.keys):
+                        t.add_input(self.task_graph.get_output_vine_file_of(k), self.task_graph.get_output_filename_of(k))
 
-                # add output files
-                for k in self.task_graph.get_output_keys_of_group(group.keys):
-                    f = self.manager.declare_temp()
-                    t.add_output(f, self.task_graph.output_filename_of[k])
-                    self.task_graph.output_vine_file_of[k] = f
+                    # add output files
+                    for k in self.task_graph.get_output_keys_of_group(group.keys):
+                        f = self.manager.declare_temp()
+                        t.add_output(f, self.task_graph.output_filename_of[k])
+                        self.task_graph.output_vine_file_of[k] = f
 
-                self.manager.submit(t)
+                    self.manager.submit(t)
+
+                t = self.manager.wait(5)
+                if t:
+                    if t.successful():
+                        task_key = key_of_task[t]
+                        for child in self.task_graph.children_of[task_key]:
+                            self.num_pending_parents_of_key[child] -= 1
+                            if self.num_pending_parents_of_key[child] == 0:
+                                self.ready_keys.append(child)
+                        pbar.update(pbar_task_id, advance=1)
+                    else:
+                        print(f"failed")
 
 task_graph_executor = TaskGraphExecutor(task_graph, lib_resources={"cores": 20, "slots": 20})
 task_graph_executor.execute()
