@@ -1,11 +1,28 @@
 from graph_tool.all import Graph as GTGraph, GraphView, label_out_component, shortest_distance
 from graph_tool.topology import topological_sort
+import cloudpickle
+import hashlib
 from utils import *
 
+FUNCTION_REGISTRY = {}
+FUNCTION_REGISTRY_INV = {}
+
+def register_function(fn):
+    try:
+        fn_id = f"{fn.__module__}.{fn.__name__}"
+    except AttributeError:
+        pickled = cloudpickle.dumps(fn)
+        fn_id = "func_" + hashlib.md5(pickled).hexdigest()
+
+    if fn_id not in FUNCTION_REGISTRY:
+        FUNCTION_REGISTRY[fn_id] = fn
+        FUNCTION_REGISTRY_INV[fn] = fn_id
+    return fn_id
+
+
 class TaskGraph:
-    @timed("TaskGraph init")
-    def __init__(self, hlg_dict, compute_keys):
-        self.sexpr_of = hlg_dict
+    def __init__(self, hlg_dict, compute_keys, convert_sexpr=True):
+        self.sexpr_of = self._create_sexpr(hlg_dict, convert_sexpr)
         self.compute_keys = compute_keys
         self.g = GTGraph(directed=True)
         self.key_to_vertex = {}
@@ -56,10 +73,30 @@ class TaskGraph:
         # global topo order
         self.global_topo_order = [self.vertex_to_key[int(v)] for v in topological_sort(self.g)]
 
+    @timed("TaskGraph create sexpr")
+    def _create_sexpr(self, hlg_dict, convert_sexpr=True):
+        sexpr_of = {}
+        for key, hlg in hlg_dict.items():
+            sexpr_of[key] = self._convert_sexpr(hlg) if convert_sexpr else hlg
+        return sexpr_of
+        
+    def _convert_sexpr(self, expr):
+        # function call: (callable, arg1, arg2, ...)
+        if isinstance(expr, tuple) and callable(expr[0]):
+            fn_name = register_function(expr[0])
+            return (fn_name,) + tuple(self._convert_sexpr(e) for e in expr[1:])
+        
+        # plain list or tuple (e.g., tuple passed as a parameter): keep it as-is, don't recurse
+        if isinstance(expr, list):
+            return [self._convert_sexpr(e) for e in expr]
+        
+        return expr  # str, int, tuple as atomic argument
+
     def _extract_deps(self, sexpr):
         if isinstance(sexpr, str):
             return {sexpr} if sexpr in self.sexpr_of else set()
-        if isinstance(sexpr, tuple) and callable(sexpr[0]):
+        if isinstance(sexpr, tuple) and isinstance(sexpr[0], str) and sexpr[0] in FUNCTION_REGISTRY:
+            # function call: ("module.fn_name", arg1, arg2, ...)
             return set.union(*(self._extract_deps(e) for e in sexpr[1:]))
         if isinstance(sexpr, (list, tuple)):
             return set.union(*(self._extract_deps(e) for e in sexpr))
@@ -80,10 +117,6 @@ class TaskGraph:
         v = self.key_to_vertex[key]
         dist = shortest_distance(self.g, source=v)
         return {self.vertex_to_key[int(u)]: dist[u] for u in self.g.vertices()}
-
-    def get_topo_order_of_group(self, group_keys):
-        group_keys_set = set(group_keys)
-        return [k for k in self.global_topo_order if k in group_keys_set]
     
     def get_input_keys_of_group(self, group_keys):
         group_set = set(group_keys)
