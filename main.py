@@ -1,5 +1,6 @@
 from task_graph import TaskGraph, FUNCTION_REGISTRY
 from function_group import FunctionGroup
+import ndcctools.taskvine as vine
 from utils import *
 
 def construct_task_graph():
@@ -10,10 +11,6 @@ def construct_task_graph():
 
 
 task_graph = construct_task_graph()
-
-import ndcctools.taskvine as vine
-from ndcctools.taskvine import FunctionCall
-
 
 class SimpleGroup:
     def __init__(self, keys, sexpr_of, input_paths, output_paths):
@@ -67,9 +64,10 @@ class TaskGraphExecutor():
             name="graph-optimization",
             # run_info_template="test2",
         )
-        self.manager.tune("watch-library-logfiles", 1)
+        # self.manager.tune("watch-library-logfiles", 1)
+        # self.manager.tune("temp-replica-count", 3)
         self.manager.tune("worker-source-max-transfers", 10000)
-        self.manager.tune("temp-replica-count", 3)
+        self.manager.tune("max-retrievals", -1)
         self.libtask = self.manager.create_library_from_functions('library', execute_converted_group, add_env=False, hoisting_modules=[SimpleGroup, FUNCTION_REGISTRY])
         if lib_resources:
             if 'cores' in lib_resources:
@@ -139,7 +137,8 @@ class TaskGraphExecutor():
 
                 t_end = time.time()
                 if num_tasks_submitted > 0:
-                    print(f"Submitted {num_tasks_submitted} tasks in {round(t_end - t_start, 5)} seconds")
+                    pass
+                    # print(f"Submitted {num_tasks_submitted} tasks in {round(t_end - t_start, 5)} seconds")
 
                 t = self.manager.wait(5)
                 if t:
