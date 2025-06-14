@@ -3,46 +3,37 @@ from graph_tool.topology import topological_sort
 import cloudpickle
 import hashlib
 from utils import *
-
-FUNCTION_REGISTRY = {}
-FUNCTION_REGISTRY_INV = {}
-
-def register_function(fn):
-    try:
-        fn_id = f"{fn.__module__}.{fn.__name__}"
-    except AttributeError:
-        pickled = cloudpickle.dumps(fn)
-        fn_id = "func_" + hashlib.md5(pickled).hexdigest()
-
-    if fn_id not in FUNCTION_REGISTRY:
-        FUNCTION_REGISTRY[fn_id] = fn
-        FUNCTION_REGISTRY_INV[fn] = fn_id
-    return fn_id
+from collections import defaultdict
+import uuid
+import numpy as np
 
 
 class TaskGraph:
-    def __init__(self, hlg_dict, compute_keys, convert_sexpr=True):
-        self.sexpr_of = self._create_sexpr(hlg_dict, convert_sexpr)
-        self.compute_keys = compute_keys
+    def __init__(self, task_dict, enable_sexpr_conversion=True, expand_dsk=True, debug=False):
+        if expand_dsk:
+            self.task_dict = self._expand_dsk(task_dict)
+        else:
+            self.task_dict = task_dict
+
+        self.map_callable_to_id = {}
+        self.map_id_to_callable = {}
+        self.task_dict = self._create_callable_mapping(self.task_dict)
+
+        self.key_to_idx = {k: i + 1 for i, k in enumerate(self.task_dict)}
+
+        self.parents_of = defaultdict(set)
+        self.children_of = defaultdict(set)
+        self._build_dependencies()
+
+        if debug:
+            self._write_task_dependencies()
+            self._visualize_task_dependencies()
+
         self.g = GTGraph(directed=True)
         self.key_to_vertex = {}
         self.vertex_to_key = {}
-        self.output_filename_of = {key: f"{uuid.uuid4()}.pkl" for key in self.sexpr_of.keys()}
-        self.output_vine_file_of = {key: None for key in self.sexpr_of.keys()}
-
-        # compute dependencies and add all nodes
-        self.parents_of = {}
-        for key in self.sexpr_of:
-            v = self.g.add_vertex()
-            self.key_to_vertex[key] = v
-            self.vertex_to_key[int(v)] = key
-            self.parents_of[key] = self._extract_deps(self.sexpr_of[key])
-
-        # compute children
-        self.children_of = defaultdict(set)
-        for key, deps in self.parents_of.items():
-            for dep in deps:
-                self.children_of[dep].add(key)
+        self.output_filename_of = {key: f"{uuid.uuid4()}.pkl" for key in self.task_dict.keys()}
+        self.output_vine_file_of = {key: None for key in self.task_dict.keys()}
 
         # add all edges
         for key, deps in self.parents_of.items():
@@ -73,34 +64,122 @@ class TaskGraph:
         # global topo order
         self.global_topo_order = [self.vertex_to_key[int(v)] for v in topological_sort(self.g)]
 
-    @timed("TaskGraph create sexpr")
-    def _create_sexpr(self, hlg_dict, convert_sexpr=True):
-        sexpr_of = {}
-        for key, hlg in hlg_dict.items():
-            sexpr_of[key] = self._convert_sexpr(hlg) if convert_sexpr else hlg
-        return sexpr_of
-        
-    def _convert_sexpr(self, expr):
-        # function call: (callable, arg1, arg2, ...)
-        if isinstance(expr, tuple) and callable(expr[0]):
-            fn_name = register_function(expr[0])
-            return (fn_name,) + tuple(self._convert_sexpr(e) for e in expr[1:])
-        
-        # plain list or tuple (e.g., tuple passed as a parameter): keep it as-is, don't recurse
-        if isinstance(expr, list):
-            return [self._convert_sexpr(e) for e in expr]
-        
-        return expr  # str, int, tuple as atomic argument
+    @timed("TaskGraph build parent-child relationships")
+    def _build_dependencies(self):
+        def _find_parents(sexpr):
+            if hashable(sexpr) and sexpr in self.task_dict.keys():
+                return {sexpr}
+            elif isinstance(sexpr, (list, tuple)):
+                deps = set()
+                for x in sexpr:
+                    deps |= _find_parents(x)
+                return deps
+            elif isinstance(sexpr, dict):
+                deps = set()
+                for k, v in sexpr.items():
+                    deps |= _find_parents(k)
+                    deps |= _find_parents(v)
+                return deps
+            else:
+                return set()
 
-    def _extract_deps(self, sexpr):
-        if isinstance(sexpr, str):
-            return {sexpr} if sexpr in self.sexpr_of else set()
-        if isinstance(sexpr, tuple) and isinstance(sexpr[0], str) and sexpr[0] in FUNCTION_REGISTRY:
-            # function call: ("module.fn_name", arg1, arg2, ...)
-            return set.union(*(self._extract_deps(e) for e in sexpr[1:]))
-        if isinstance(sexpr, (list, tuple)):
-            return set.union(*(self._extract_deps(e) for e in sexpr))
-        return set()
+        for key, sexpr in self.task_dict.items():
+            self.parents_of[key] = _find_parents(sexpr)
+
+        for key, deps in self.parents_of.items():
+            for dep in deps:
+                self.children_of[dep].add(key)
+
+    @timed("TaskGraph write task dependencies")
+    def _write_task_dependencies(self):
+        with open("task_dependencies.txt", "w") as f:
+            for key, parents in self.parents_of.items():
+                if parents:
+                    for parent in parents:
+                        if parent != key:
+                            f.write(f"{self.key_to_idx[parent]} -> {self.key_to_idx[key]}\n")
+                else:
+                    f.write(f"None -> {self.key_to_idx[key]}\n")
+
+    @timed("TaskGraph visualize task dependencies")
+    def _visualize_task_dependencies(self, input_file="task_dependencies.txt", output_file="task_graph"):
+        dot = Digraph(format='svg')
+        with open(input_file) as f:
+            for line in f:
+                parts = line.strip().split("->")
+                if len(parts) != 2:
+                    continue
+                parent = parts[0].strip()
+                child = parts[1].strip()
+                if parent != "None":
+                    dot.edge(parent, child)
+                else:
+                    dot.node(child)  # ensure orphan nodes appear
+        dot.render(output_file, cleanup=True)
+
+    def convert_expr_to_task_args(self, dsk_key, task_dict, args, blockwise_args):
+        try:
+            if args in task_dict:
+                return hash_name(dsk_key, args)
+        except:
+            pass
+        if isinstance(args, list):
+            return [self.convert_expr_to_task_args(dsk_key, task_dict, item, blockwise_args) for item in args]
+        elif isinstance(args, tuple):
+            # nested tuple is not allowed
+            return tuple(self.convert_expr_to_task_args(dsk_key, task_dict, item, blockwise_args) for item in args)
+        else:
+            if isinstance(args, str) and args.startswith('__dask_blockwise__'):
+                blockwise_arg_idx = int(args.split('__')[-1])
+                return blockwise_args[blockwise_arg_idx]
+            return args
+
+    @timed("TaskGraph expand task_dict")
+    def _expand_dsk(self, task_dict, save_dir="./"):
+        assert os.path.exists(save_dir)
+
+        expanded_task_dict = {}
+
+        for k, sexpr in task_dict.items():
+            callable = sexpr[0]
+            args = sexpr[1:]
+
+            if isinstance(callable, dask.optimization.SubgraphCallable):
+                expanded_task_dict[k] = hash_name(k, callable.outkey)
+                for sub_key, sub_sexpr in callable.dsk.items():
+                    unique_key = hash_name(k, sub_key)
+                    expanded_task_dict[unique_key] = self.convert_expr_to_task_args(k, callable.dsk, sub_sexpr, args)
+            elif isinstance(callable, types.FunctionType):
+                expanded_task_dict[k] = sexpr
+            else:
+                print(f"ERROR: unexpected type: {type(callable)}")
+                exit(1)
+        
+        return expanded_task_dict
+
+    @timed("TaskGraph reduce task_dict callables")
+    def _create_callable_mapping(self, task_dict):
+        def recurse(obj):
+            if isinstance(obj, dict):
+                return {k: recurse(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [recurse(e) for e in obj]
+            elif isinstance(obj, tuple):
+                if callable(obj[0]):
+                    try:
+                        callable_id = f"{obj[0].__module__}.{obj[0].__name__}"
+                    except AttributeError:
+                        pickled = cloudpickle.dumps(obj[0])
+                        callable_id = "callable_" + hashlib.md5(pickled).hexdigest()
+                    self.map_callable_to_id[obj[0]] = callable_id
+                    self.map_id_to_callable[callable_id] = obj[0]
+                    return (callable_id,) + tuple(recurse(e) for e in obj[1:])
+                else:
+                    return tuple(recurse(e) for e in obj)
+            else:
+                return obj
+
+        return {k: recurse(v) for k, v in task_dict.items()}
 
     def get_reachable_from(self, key):
         v = self.key_to_vertex[key]
@@ -134,4 +213,4 @@ class TaskGraph:
         }
 
     def get_sexpr_of_group(self, group_keys):
-        return {k: self.sexpr_of[k] for k in group_keys}
+        return {k: self.task_dict[k] for k in group_keys}
