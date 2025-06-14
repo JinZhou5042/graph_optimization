@@ -64,12 +64,15 @@ def compute_group_keys(keys):
     return True
 
 class TaskGraphExecutor():
-    def __init__(self, task_graph, lib_resources=None):
+    def __init__(self, task_graph, lib_resources=None, prune_depth=1):
+        self.prune_depth = prune_depth
+
         self.manager = vine.Manager(
             9126,
             name="graph-optimization",
             # run_info_template="test2",
         )
+
         # self.manager.tune("watch-library-logfiles", 1)
         # self.manager.tune("temp-replica-count", 3)
         self.manager.tune("worker-source-max-transfers", 10000)
@@ -102,6 +105,8 @@ class TaskGraphExecutor():
 
         self.task_graph = task_graph
         self.num_pending_parents_of_key = {k: len(self.task_graph.parents_of[k]) for k in self.task_graph.task_dict.keys()}
+        self.num_pending_children_of_key = {k: len(self.task_graph.children_of[k]) for k in self.task_graph.task_dict.keys()}
+
         self.ready_keys = deque([k for k in self.task_graph.task_dict.keys() if self.num_pending_parents_of_key[k] == 0])
 
     def execute(self):
@@ -117,7 +122,6 @@ class TaskGraphExecutor():
                     t = FunctionCall('library', 'compute_group_keys', keys)
 
                     t.set_cores(1)
-                    t.set_priority(-time.time())
                     key_of_task[t] = rk
 
                     # add input files
@@ -141,12 +145,21 @@ class TaskGraphExecutor():
                 t = self.manager.wait(5)
                 if t:
                     if t.successful():
+                        pbar.update(pbar_task, advance=1)
+                        
                         task_key = key_of_task[t]
+
+                        # enqueue new tasks
                         for child in self.task_graph.children_of[task_key]:
                             self.num_pending_parents_of_key[child] -= 1
                             if self.num_pending_parents_of_key[child] == 0:
                                 self.ready_keys.append(child)
-                        pbar.update(pbar_task, advance=1)
+
+                        # prune stale files
+                        for parent in self.task_graph.parents_of[task_key]:
+                            self.num_pending_children_of_key[parent] -= 1
+                            if self.num_pending_children_of_key[parent] == 0:
+                                self.manager.prune_file(self.task_graph.output_vine_file_of[parent])
                     else:
                         print(f"failed")
                         time.sleep(1)
@@ -158,9 +171,9 @@ class TaskGraphExecutor():
                         pass
 
 
-def main(checkpoint=False, load=False):
-    tasks = load_from("tasks.pkl")
-    # tasks = load_from("large_tasks.pkl")
+def main(checkpoint=False, load=False, expand=False, prune_depth=1):
+    # tasks = load_from("tasks.pkl")
+    tasks = load_from("large_tasks.pkl")
     task_list = list(tasks.values())
     hlg = collections_to_dsk(task_list)
     task_dict = flatten_hlg(hlg)
@@ -168,13 +181,13 @@ def main(checkpoint=False, load=False):
     if load:
         task_graph = load_task_graph()
     else:
-        task_graph = TaskGraph(task_dict, expand_dsk=False, enable_sexpr_conversion=False)
+        task_graph = TaskGraph(task_dict, expand_dsk=expand, enable_sexpr_conversion=False)
 
     if checkpoint:
         with open("task_graph.pkl", 'wb') as f:
             cloudpickle.dump(task_graph, f)
 
-    task_graph_executor = TaskGraphExecutor(task_graph, lib_resources={"cores": 16, "slots": 16})
+    task_graph_executor = TaskGraphExecutor(task_graph, lib_resources={"cores": 16, "slots": 16}, prune_depth=prune_depth)
     task_graph_executor.execute()
 
 
@@ -183,8 +196,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", action="store_true")
     parser.add_argument("--load", action="store_true")
+    parser.add_argument("--expand", action="store_true")
+    parser.add_argument("--prune-depth", type=int, default=1)
     args = parser.parse_args()
 
     assert not (args.checkpoint and args.load)
 
-    main(args.checkpoint, args.load)
+    main(args.checkpoint, args.load, args.expand, args.prune_depth)
