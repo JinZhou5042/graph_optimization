@@ -7,13 +7,12 @@ import argparse
 import uuid
 from functools import wraps
 import sys
-from pympler import asizeof
-from graphviz import Digraph
 from collections import defaultdict, deque
 from rich.progress import Progress, SpinnerColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn, TimeRemainingColumn
 import hashlib
 import json
 import os
+import collections
 import shutil
 import types
 from dask.utils import ensure_dict
@@ -71,6 +70,7 @@ def load_from(file_path):
         return cloudpickle.load(f)
     
 def print_size_of(obj, label="Object"):
+    from pympler import asizeof
     size = asizeof.asizeof(obj)
     if size < 1024:
         print(f"{label} size: {size} Bytes")
@@ -109,70 +109,29 @@ def serialize_obj(obj, valid_keys):
     else:
         return obj
 
-@timed("Save task dict to json")
-def save_task_dict_to_json(task_dict, output_path="task_dict.json"):
-    valid_keys = set(task_dict.keys())
-    result = {}
-    for k, v in task_dict.items():
-        k_str = str(k)
-        if isinstance(v, tuple) and callable(v[0]):
-            fn_str = stringify_callable(v[0])
-            args_serialized = [serialize_obj(arg, valid_keys) for arg in v[1:]]
-            result[k_str] = [fn_str] + args_serialized
-        else:
-            result[k_str] = serialize_obj(v, valid_keys)
-    with open(output_path, "w") as f:
-        json.dump(result, f, indent=2)
-
-@timed("Save task dependencies")
-def save_task_dependencies(task_dict_path="task_dict.json", output_path="task_dependencies.txt"):
-    with open(task_dict_path) as f:
-        task_dict = json.load(f)
-
-    keys = list(task_dict.keys())
-    key_to_id = {k: str(i + 1) for i, k in enumerate(keys)}
-    key_set = set(keys)
-
-    edges = []
-    has_parent = set()
-
-    for k, v in task_dict.items():
-        def find_parents(val):
-            if isinstance(val, (list, tuple)):
-                for x in val:
-                    find_parents(x)
-            elif isinstance(val, str) and val in key_set and val != k:
-                edges.append(f"{key_to_id[val]} -> {key_to_id[k]}")
-                has_parent.add(k)
-
-        find_parents(v)
-
-    for k in task_dict:
-        if k not in has_parent:
-            edges.append(f"None -> {key_to_id[k]}")
-
-    with open(output_path, "w") as f:
-        f.write("\n".join(edges))
-
-@timed("Visualize task dependencies")
-def visualize_task_dependencies(input_file="task_dependencies.txt", output_file="task_graph"):
-    dot = Digraph(format='svg')
-    with open(input_file) as f:
-        for line in f:
-            parts = line.strip().split("->")
-            if len(parts) != 2:
-                continue
-            parent = parts[0].strip()
-            child = parts[1].strip()
-            if parent != "None":
-                dot.edge(parent, child)
-            else:
-                dot.node(child)
-    dot.render(output_file, cleanup=True)
-
 def hashable(s):
     try:
         hash(s)
         return True
     except TypeError:
         return False
+
+def flatten_hlg(hlg):
+    assert isinstance(hlg, HighLevelGraph)
+    task_dict = {}
+    for k, sexpr in hlg.items():
+        if isinstance(sexpr, SubgraphCallable):
+            args = sexpr.args
+            outkey = sexpr.outkey
+            task_dict[k] = hash_name(k, outkey)
+            for subkey, subexpr in sexpr.dsk.items():
+                unique_key = hash_name(k, subkey)
+                converted = TaskGraph.convert_expr_to_task_args(None, sexpr.dsk, subexpr, args)
+                task_dict[unique_key] = converted
+        elif isinstance(sexpr, tuple):
+            task_dict[k] = sexpr
+        elif isinstance(sexpr, (int, float, str)):
+            task_dict[k] = sexpr
+        else:
+            raise ValueError(f"Unexpected type in HLG: {type(sexpr)}")
+    return task_dict
