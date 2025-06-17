@@ -70,7 +70,8 @@ class TaskGraphExecutor():
         self.manager = vine.Manager(
             9126,
             name="graph-optimization",
-            # run_info_template="test2",
+            run_info_path="/project01/ndcms/jzhou24/vine-run-info",
+            run_info_template="huge_run",
         )
 
         # self.manager.tune("watch-library-logfiles", 1)
@@ -122,6 +123,8 @@ class TaskGraphExecutor():
                     t = FunctionCall('library', 'compute_group_keys', keys)
 
                     t.set_cores(1)
+                    total_input_size = sum(len(self.task_graph.output_vine_file_of[p]) for p in self.task_graph.parents_of[rk])
+                    t.set_priority(total_input_size)
                     key_of_task[t] = rk
 
                     # add input files
