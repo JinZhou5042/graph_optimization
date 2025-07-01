@@ -122,7 +122,7 @@ class Graph:
     def set_output_vine_file_of(self, k, output_vine_file):
         self.nodes[k].output_vine_file = output_vine_file
 
-    def get_output_filename_of(self, k):
+    def get_outfile_remote_name(self, k):
         return self.nodes[k].output_filename
 
     def children_of(self, k):
@@ -592,11 +592,11 @@ class SimpleGroup:
         self.output_of = {k: None for k in group.keys}
         # these are parent keys outside of this group, these outputs are used as inputs and should be loaded from pkl
         for k in self.parents:
-            self.output_of[k] = graph.get_output_filename_of(k)
+            self.output_of[k] = graph.get_outfile_remote_name(k)
 
         # output of these keys are going to be dumped to files
         self.outkeys = {k for k in self.keys if any(child not in self.keys for child in self.children_of[k])}
-        self.output_filenames = {k: graph.get_output_filename_of(k) for k in self.outkeys}
+        self.output_filenames = {k: graph.get_outfile_remote_name(k) for k in self.outkeys}
 
 
 class MyFunctionCall(FunctionCall):
@@ -772,7 +772,7 @@ def enqueue_ready_keys(graph):
         t.enable_temp_output()
 
         for k in t.group.parents:
-            t.add_input(graph.get_output_vine_file_of(k), graph.get_output_filename_of(k))
+            t.add_input(graph.get_output_vine_file_of(k), graph.get_outfile_remote_name(k))
 
         for k, output_filename in t.group.output_filenames.items():
             f = q.declare_temp()

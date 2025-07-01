@@ -120,18 +120,6 @@ def flatten_hlg(hlg):
     assert isinstance(hlg, HighLevelGraph)
     task_dict = {}
     for k, sexpr in hlg.items():
-        if isinstance(sexpr, SubgraphCallable):
-            args = sexpr.args
-            outkey = sexpr.outkey
-            task_dict[k] = hash_name(k, outkey)
-            for subkey, subexpr in sexpr.dsk.items():
-                unique_key = hash_name(k, subkey)
-                converted = TaskGraph.convert_expr_to_task_args(None, sexpr.dsk, subexpr, args)
-                task_dict[unique_key] = converted
-        elif isinstance(sexpr, tuple):
-            task_dict[k] = sexpr
-        elif isinstance(sexpr, (int, float, str)):
-            task_dict[k] = sexpr
-        else:
-            raise ValueError(f"Unexpected type in HLG: {type(sexpr)}")
+        task_dict[k] = sexpr
+
     return task_dict
